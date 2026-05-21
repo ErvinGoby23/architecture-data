@@ -11,11 +11,11 @@ import os
 
 # ── 1. Chargement ──────────────────────────────────────────────────────────
 print("📥 Chargement des données...")
-df = pd.read_csv('../brute/indicateur-Score-accessibilité-mobilité/stationnement-voie-publique-emplacements.csv', sep=';', low_memory=False)
+df = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/stationnement-voie-publique-emplacements.csv', sep=';', low_memory=False)
 df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
 print(f"   Shape brute : {df.shape}")
 
-df_arr = pd.read_csv('../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
+df_arr = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
 print(f"   Arrondissements chargés : {df_arr.shape}")
 
 # ── 2. Suppression colonnes inutiles ──────────────────────────────────────
@@ -147,9 +147,12 @@ df_final = df_final.drop(columns=[c for c in ['index_right', 'geometry', col_num
 print(f"\n   Emplacements Paris retenus : {len(df_final):,}")
 print(f"   Arrondissements            : {sorted(df_final['arrondissement'].unique())}")
 
+cols_drop_final = ['code_insee', 'arrondissement_insee', 'arrondissement', 'arrondissement_source', 'code_insee_source']
+df_final = df_final.drop(columns=[c for c in cols_drop_final if c in df_final.columns])
+
 # ── 10. Sauvegarde ────────────────────────────────────────────────────────
 os.makedirs('silver', exist_ok=True)
-output = 'silver/stationnement_final_paris.csv'
+output = 'nettoyage-indicateur1/stationnement_final_paris.csv'
 df_final.to_csv(output, index=False, sep=';')
 print(f"\n✅ Fichier créé : {output}")
 print(f"   Shape finale  : {df_final.shape}")
