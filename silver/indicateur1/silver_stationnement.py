@@ -167,7 +167,7 @@ else:
     for _, row in echantillons.iterrows():
         nom_voie = row.get('nom_voie', 'N/A')
         cp       = int(row['code_postal'])
-        arrond   = int(row['arrondissement'])
+        arrond   = int(row['code_postal']) - 75000
         # Récupérer lat/lon depuis geo_point_2d original
         try:
             lat, lon = map(float, str(row.get('geo_point_2d', '')).split(','))

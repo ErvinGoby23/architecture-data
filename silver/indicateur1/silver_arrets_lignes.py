@@ -11,11 +11,11 @@ import os
 
 # ── 1. Chargement ──────────────────────────────────────────────────────────
 print("📥 Chargement des données...")
-df = pd.read_csv('../brute/indicateur-Score-accessibilité-mobilité/arrets-lignes.csv', sep=None, engine='python')
+df = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrets-lignes.csv', sep=None, engine='python')
 df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
 print(f"   Shape brute : {df.shape}")
 
-df_arr = pd.read_csv('../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
+df_arr = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
 print(f"   Arrondissements chargés : {df_arr.shape}")
 print(f"   Colonnes arrondissements : {list(df_arr.columns)}")
 
@@ -65,12 +65,11 @@ def parse_geometry(geom_str):
     except Exception:
         return None
 
-# Prendre 'Geometry' exacte en priorité, pas 'Geometry X Y'
-geo_col_arr  = next((c for c in df_arr.columns if c.strip() == 'Geometry'), None)
+geo_col_arr = next((c for c in df_arr.columns if c.strip() == 'Geometry'), None)
 if not geo_col_arr:
     geo_col_arr = next((c for c in df_arr.columns if 'geom' in c.lower() and 'x y' not in c.lower()), None)
-col_num      = next((c for c in df_arr.columns if 'numéro' in c.lower() and 'insee' not in c.lower() and 'séquentiel' not in c.lower()), None)
-col_insee    = next((c for c in df_arr.columns if 'insee' in c.lower()), None)
+col_num   = next((c for c in df_arr.columns if 'numéro' in c.lower() and 'insee' not in c.lower() and 'séquentiel' not in c.lower()), None)
+col_insee = next((c for c in df_arr.columns if 'insee' in c.lower()), None)
 
 print(f"   Géométrie  : {geo_col_arr}")
 print(f"   Num arrond : {col_num}")
@@ -100,25 +99,30 @@ df_final['code_postal'] = df_final['code_postal'].astype(int)
 df_final = df_final.drop(columns=[c for c in ['index_right', 'geometry', col_num] if c in df_final.columns])
 
 print(f"\n   Arrêts Paris retenus  : {len(df_final):,}")
-print(f"   Arrondissements       : {sorted(df_final['arrondissement'].unique())}")
+print(f"   Code postaux uniques  : {sorted(df_final['code_postal'].unique())}")
 
-# ── 9. Sauvegarde ─────────────────────────────────────────────────────────
-os.makedirs('silver', exist_ok=True)
-output = 'silver/arrets_lignes_final_paris.csv'
+# ── 9. Drop colonnes intermédiaires — garder uniquement code_postal ───────
+cols_drop_final = ['code_insee', 'arrondissement_insee', 'arrondissement', 'arrondissement_source']
+df_final = df_final.drop(columns=[c for c in cols_drop_final if c in df_final.columns])
+
+# ── 10. Sauvegarde ────────────────────────────────────────────────────────
+os.makedirs('nettoyage-indicateur1', exist_ok=True)
+output = 'nettoyage-indicateur1/arrets_lignes_final_paris.csv'
 df_final.to_csv(output, index=False, sep=';')
 print(f"\n✅ Fichier créé : {output}")
 print(f"   Shape finale  : {df_final.shape}")
+print(f"   Colonnes      : {list(df_final.columns)}")
 
-# ── 10. Vérification aléatoire ────────────────────────────────────────────
+# ── 11. Vérification aléatoire ────────────────────────────────────────────
 print("\n--- VÉRIFICATION ALÉATOIRE ---")
 if len(df_final) == 0:
     print("⚠️  Aucun arrêt trouvé")
 else:
-  for _, row in df_final.sample(n=min(5, len(df_final)), random_state=42).iterrows():
-    maps_url = f"https://www.google.com/maps?q={row['stop_lat']},{row['stop_lon']}"
-    print(f"\nArrêt   : {row['stop_name']}")
-    print(f"Arrond. : {int(row['arrondissement'])}")
-    print(f"CP      : {int(row['code_postal'])}")
-    print(f"Lien    : {maps_url}")
+    for _, row in df_final.sample(n=min(5, len(df_final)), random_state=42).iterrows():
+        maps_url = f"https://www.google.com/maps?q={row['stop_lat']},{row['stop_lon']}"
+        print(f"\nArrêt   : {row['stop_name']}")
+        print(f"CP      : {int(row['code_postal'])}")
+        print(f"Arrond. : {int(row['code_postal']) - 75000}")
+        print(f"Lien    : {maps_url}")
 
 print("\n--- FIN ---")
