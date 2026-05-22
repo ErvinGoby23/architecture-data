@@ -1,57 +1,41 @@
-"""
-gold_indicateur_mobilite.py
-Calcul du score de mobilité par arrondissement normalisé par superficie
-Source : ../../silver/indicateur1/nettoyage-indicateur1/indicateur_mobilite_silver.parquet
-         ../../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv
-Output : ./indicateur_mobilite.parquet
-"""
-
 import pandas as pd
 import numpy as np
 import os
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+from pymongo import MongoClient
 
-SILVER = '../../silver/indicateur1/nettoyage-indicateur1'
-BRUTE  = '../../brute/indicateur-Score-accessibilité-mobilité'
-GOLD   = '.'
+load_dotenv('../../.env')
 
-# ── 1. Chargement ──────────────────────────────────────────────────────────
-print("📥 Chargement Silver...")
-df = pd.read_parquet(f'{SILVER}/indicateur_mobilite_silver.parquet')
-print(f"   Shape : {df.shape}")
+BRUTE     = '../../brute/indicateur-Score-accessibilité-mobilité'
+GOLD_DIR  = '../../gold/indicateur1/'
+PG_URL    = os.getenv('PG_URL')
+MONGO_URL = os.getenv('MONGO_URL')
+MONGO_DB  = 'gold'
+os.makedirs(GOLD_DIR, exist_ok=True)
 
-# ── 2. Chargement superficie arrondissements ───────────────────────────────
-print("\n📐 Chargement superficie arrondissements...")
-df_arr = pd.read_csv(f'{BRUTE}/arrondissements.csv', sep=';')
-print(f"   Colonnes : {list(df_arr.columns)}")
+engine = create_engine(PG_URL)
+df = pd.read_sql('SELECT * FROM silver.indicateur_mobilite', engine)
+print(f"Shape : {df.shape}")
+print(f"Colonnes : {list(df.columns)}")
 
-# Détecter colonne superficie et numéro arrondissement
+df_arr      = pd.read_csv(f'{BRUTE}/arrondissements.csv', sep=';')
 col_surface = next((c for c in df_arr.columns if 'surface' in c.lower()), None)
 col_num     = next((c for c in df_arr.columns if 'numéro' in c.lower() and 'insee' not in c.lower() and 'séquentiel' not in c.lower()), None)
-print(f"   Surface : {col_surface}")
-print(f"   Num arr : {col_num}")
 
 df_surface = df_arr[[col_num, col_surface]].copy()
 df_surface.columns = ['arrondissement', 'surface_m2']
-
-# Surface en km²
 df_surface['surface_km2'] = df_surface['surface_m2'] / 1_000_000
 
-# Merge avec le dataset Gold
 df = df.merge(df_surface, on='arrondissement', how='left')
-print(f"\n   Surface par arrondissement :")
-print(df[['arrondissement', 'surface_km2']].to_string(index=False))
 
-# ── 3. Normalisation par superficie ───────────────────────────────────────
-print("\n📊 Normalisation par superficie (par km²)...")
-df['nb_arrets_par_km2']  = (df['nb_arrets']       / df['surface_km2']).round(2)
-df['nb_lignes_par_km2']  = (df['nb_lignes']        / df['surface_km2']).round(2)
-df['nb_bornes_par_km2']  = (df['nb_bornes']        / df['surface_km2']).round(2)
-df['nb_places_par_km2']  = (df['nb_places_total']  / df['surface_km2']).round(2)
-
-print(df[['arrondissement', 'nb_arrets_par_km2', 'nb_bornes_par_km2', 'nb_places_par_km2']].to_string(index=False))
-
-# ── 4. Score final normalisé par km² ──────────────────────────────────────
-print("\n🧮 Calcul du score final normalisé...")
+df['nb_arrets_par_km2']         = (df['nb_arrets']           / df['surface_km2']).round(2)
+df['nb_lignes_par_km2']         = (df['nb_lignes']            / df['surface_km2']).round(2)
+df['nb_bornes_par_km2']         = (df['nb_bornes']            / df['surface_km2']).round(2)
+df['nb_places_gratuit_par_km2'] = (df['nb_places_gratuit']    / df['surface_km2']).round(2)
+df['nb_places_2roues_par_km2']  = (df['nb_places_2roues']     / df['surface_km2']).round(2)
+df['nb_places_pmr_par_km2']     = (df['nb_places_pmr']        / df['surface_km2']).round(2)
+df['nb_places_elec_par_km2']    = (df['nb_places_electrique'] / df['surface_km2']).round(2)
 
 def normalize(series):
     min_v, max_v = series.min(), series.max()
@@ -59,35 +43,53 @@ def normalize(series):
         return pd.Series([0.5] * len(series), index=series.index)
     return (series - min_v) / (max_v - min_v)
 
-df['score_arrets']        = normalize(df['nb_arrets_par_km2'])
-df['score_lignes']        = normalize(df['nb_lignes_par_km2'])
-df['score_modes']         = normalize(df['nb_modes'])
-df['score_taxi']          = normalize(df['nb_bornes_par_km2'])
-df['score_stationnement'] = normalize(df['nb_places_par_km2'])
+df['score_arrets']     = normalize(df['nb_arrets_par_km2'])
+df['score_lignes']     = normalize(df['nb_lignes_par_km2'])
+df['score_modes']      = normalize(df['nb_modes'])
+df['score_taxi']       = normalize(df['nb_bornes_par_km2'])
+df['score_gratuit']    = normalize(df['nb_places_gratuit_par_km2'])
+df['score_2roues']     = normalize(df['nb_places_2roues_par_km2'])
+df['score_pmr']        = normalize(df['nb_places_pmr_par_km2'])
+df['score_electrique'] = normalize(df['nb_places_elec_par_km2'])
 
 df['score_mobilite'] = (
-    df['score_arrets']        * 0.30 +
-    df['score_lignes']        * 0.25 +
-    df['score_modes']         * 0.15 +
-    df['score_taxi']          * 0.15 +
-    df['score_stationnement'] * 0.15
+    df['score_arrets']     * 0.25 +
+    df['score_lignes']     * 0.20 +
+    df['score_modes']      * 0.10 +
+    df['score_taxi']       * 0.10 +
+    df['score_gratuit']    * 0.15 +
+    df['score_2roues']     * 0.10 +
+    df['score_pmr']        * 0.05 +
+    df['score_electrique'] * 0.05
 ).round(4)
 
-# ── 5. Export ─────────────────────────────────────────────────────────────
-output = f'{GOLD}/indicateur_mobilite.parquet'
-df.to_parquet(output, index=False)
-print(f"\n✅ Export : {output}")
-print(f"   Shape  : {df.shape}")
-print(f"   Colonnes : {list(df.columns)}")
+df_gold = df.copy()
 
-# ── 6. Résumé ─────────────────────────────────────────────────────────────
-print("\n" + "="*65)
-print("SCORE MOBILITÉ PAR ARRONDISSEMENT (normalisé par superficie)")
-print("="*65)
+print(f"\nShape gold : {df_gold.shape}")
 cols = ['arrondissement', 'code_postal', 'surface_km2',
         'nb_arrets_par_km2', 'nb_bornes_par_km2',
-        'nb_places_par_km2', 'score_mobilite']
-print(df[cols].sort_values('score_mobilite', ascending=False).to_string(index=False))
+        'nb_places_gratuit_par_km2', 'nb_places_2roues_par_km2',
+        'score_mobilite']
+print(df_gold[cols].sort_values('score_mobilite', ascending=False).to_string(index=False))
+print(f"Meilleur   : {df_gold.loc[df_gold['score_mobilite'].idxmax(), 'arrondissement']}e arrondissement")
+print(f"Moins bien : {df_gold.loc[df_gold['score_mobilite'].idxmin(), 'arrondissement']}e arrondissement")
 
-print(f"\n🏆 Meilleur   : {df.loc[df['score_mobilite'].idxmax(), 'arrondissement']}e arrondissement")
-print(f"📉 Moins bien : {df.loc[df['score_mobilite'].idxmin(), 'arrondissement']}e arrondissement")
+parquet_path = GOLD_DIR + 'score_mobilite_gold.parquet'
+df_gold.to_parquet(parquet_path, index=False)
+print(f'✓ Parquet : {parquet_path}')
+
+with engine.connect() as conn:
+    conn.execute(text("CREATE SCHEMA IF NOT EXISTS gold;"))
+    conn.execute(text("DROP TABLE IF EXISTS gold.score_mobilite CASCADE;"))
+    conn.commit()
+
+df_gold.to_sql('score_mobilite', engine, if_exists='replace', index=False, schema='gold')
+print(f'✓ PostgreSQL : table gold.score_mobilite ({len(df_gold)} lignes)')
+
+client = MongoClient(MONGO_URL)
+client.drop_database('gold')
+mongo = client[MONGO_DB]
+mongo['score_mobilite'].insert_many(df_gold.to_dict(orient='records'))
+print(f'✓ MongoDB Atlas : collection score_mobilite ({len(df_gold)} documents)')
+
+print('\n=== GOLD mobilité OK ===')
