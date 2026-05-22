@@ -1,108 +1,127 @@
-"""
-silver_selection_indicateur1.py
-Sélection des colonnes utiles pour l'indicateur mobilité
-Sources : 3 fichiers nettoyés Silver
-Output  : 3 fichiers allégés dans nettoyage-indicateur1/
-"""
-
 import pandas as pd
 import os
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+from pymongo import MongoClient
 
-SILVER = 'nettoyage-indicateur1'
+load_dotenv('../../.env')
+
+SILVER     = 'nettoyage-indicateur1'
+SILVER_DIR = '../../silver/indicateur1/'
+PG_URL     = os.getenv('PG_URL')
+MONGO_URL  = os.getenv('MONGO_URL')
+MONGO_DB   = 'silver'
 os.makedirs(SILVER, exist_ok=True)
+os.makedirs(SILVER_DIR, exist_ok=True)
 
-# ══════════════════════════════════════════════════════════════════════════
-# 1. ARRÊTS & LIGNES
-# ══════════════════════════════════════════════════════════════════════════
-print("📥 Arrêts & lignes...")
-df = pd.read_csv(f'{SILVER}/arrets_lignes_final_paris.csv', sep=';')
-print(f"   Shape entrée : {df.shape}")
-print(f"   Colonnes dispo : {list(df.columns)}")
+df_arrets = pd.read_csv(f'{SILVER}/arrets_lignes_final_paris.csv', sep=';')
+df_taxi   = pd.read_csv(f'{SILVER}/bornes_taxi_final_paris.csv', sep=';')
+df_stat   = pd.read_csv(f'{SILVER}/stationnement_final_paris.csv', sep=';')
 
-cols = ['code_postal', 'arrondissement', 'stop_id', 'stop_lat', 'stop_lon',
-        'route_type', 'route_short_name']
-cols = [c for c in cols if c in df.columns]
-df = df[cols]
+cols_arrets = ['code_postal', 'stop_id', 'stop_lat', 'stop_lon', 'route_type', 'route_short_name']
+cols_taxi   = ['code_postal', 'borne_id', 'lat', 'lon', 'nb_emplacements']
+cols_stat   = ['code_postal', 'nb_places_reelles', 'regime_category']
 
-df.to_parquet(f'{SILVER}/arrets_lignes_select.parquet', index=False)
-print(f"   Shape sortie  : {df.shape}")
-print(f"   Colonnes      : {list(df.columns)}")
+df_arrets = df_arrets[[c for c in cols_arrets if c in df_arrets.columns]]
+df_taxi   = df_taxi[[c for c in cols_taxi     if c in df_taxi.columns]]
+df_stat   = df_stat[[c for c in cols_stat     if c in df_stat.columns]]
 
-# ══════════════════════════════════════════════════════════════════════════
-# 2. BORNES TAXI
-# ══════════════════════════════════════════════════════════════════════════
-print("\n📥 Bornes taxi...")
-df = pd.read_csv(f'{SILVER}/bornes_taxi_final_paris.csv', sep=';')
-print(f"   Shape entrée : {df.shape}")
-print(f"   Colonnes dispo : {list(df.columns)}")
+df_stat = df_stat[df_stat['regime_category'].notna()].copy()
 
-cols = ['code_postal', 'arrondissement', 'borne_id', 'lat', 'lon',
-        'nb_emplacements']
-cols = [c for c in cols if c in df.columns]
-df = df[cols]
+def count_unique_stops(x):
+    return x.nunique()
 
-df.to_parquet(f'{SILVER}/bornes_taxi_select.parquet', index=False)
-print(f"   Shape sortie  : {df.shape}")
-print(f"   Colonnes      : {list(df.columns)}")
+def count_unique_lines(x):
+    return x.nunique()
 
-# ══════════════════════════════════════════════════════════════════════════
-# 3. STATIONNEMENT
-# ══════════════════════════════════════════════════════════════════════════
-print("\n📥 Stationnement...")
-df = pd.read_csv(f'{SILVER}/stationnement_final_paris.csv', sep=';')
-print(f"   Shape entrée : {df.shape}")
-print(f"   Colonnes dispo : {list(df.columns)}")
+def count_unique_modes(x):
+    return x.nunique()
 
-cols = ['code_postal', 'arrondissement', 'nb_places_reelles',
-        'regime_prioritaire', 'localisation']
-cols = [c for c in cols if c in df.columns]
-df = df[cols]
+def sum_emplacements(x):
+    return x.sum()
 
-df.to_parquet(f'{SILVER}/stationnement_select.parquet', index=False)
-print(f"   Shape sortie  : {df.shape}")
-print(f"   Colonnes      : {list(df.columns)}")
+def sum_places(x):
+    return x.sum()
 
-print("\n✅ Sélection terminée — 3 fichiers dans nettoyage-indicateur1/")
-print("   arrets_lignes_select.parquet")
-print("   bornes_taxi_select.parquet")
-print("   stationnement_select.parquet")
-
-# ══════════════════════════════════════════════════════════════════════════
-# 4. FUSION DES 3 EN UN SEUL PARQUET
-# ══════════════════════════════════════════════════════════════════════════
-print("\n🔗 Fusion des 3 datasets...")
-
-df_arrets = pd.read_parquet(f'{SILVER}/arrets_lignes_select.parquet')
-df_taxi   = pd.read_parquet(f'{SILVER}/bornes_taxi_select.parquet')
-df_stat   = pd.read_parquet(f'{SILVER}/stationnement_select.parquet')
-
-# Agrégation par code_postal avant fusion
 agg_arrets = df_arrets.groupby('code_postal').agg(
-    nb_arrets  = ('stop_id',          'nunique'),
-    nb_lignes  = ('route_short_name', 'nunique'),
-    nb_modes   = ('route_type',       'nunique'),
+    nb_arrets = ('stop_id',          count_unique_stops),
+    nb_lignes = ('route_short_name', count_unique_lines),
+    nb_modes  = ('route_type',       count_unique_modes),
 ).reset_index()
 
 agg_taxi = df_taxi.groupby('code_postal').agg(
-    nb_bornes            = ('borne_id',       'count'),
-    nb_emplacements_taxi = ('nb_emplacements', 'sum'),
+    nb_bornes            = ('borne_id',        'count'),
+    nb_emplacements_taxi = ('nb_emplacements', sum_emplacements),
 ).reset_index()
 
-agg_stat = df_stat.groupby('code_postal').agg(
-    nb_places_total = ('nb_places_reelles', 'sum'),
-).reset_index()
+df_stat_gratuit    = df_stat[df_stat['regime_category'] == 'gratuit'].groupby('code_postal').agg(nb_places_gratuit    = ('nb_places_reelles', sum_places)).reset_index()
+df_stat_payant     = df_stat[df_stat['regime_category'] == 'payant'].groupby('code_postal').agg(nb_places_payant     = ('nb_places_reelles', sum_places)).reset_index()
+df_stat_2roues     = df_stat[df_stat['regime_category'] == '2roues'].groupby('code_postal').agg(nb_places_2roues     = ('nb_places_reelles', sum_places)).reset_index()
+df_stat_pmr        = df_stat[df_stat['regime_category'] == 'pmr'].groupby('code_postal').agg(nb_places_pmr        = ('nb_places_reelles', sum_places)).reset_index()
+df_stat_electrique = df_stat[df_stat['regime_category'] == 'electrique'].groupby('code_postal').agg(nb_places_electrique = ('nb_places_reelles', sum_places)).reset_index()
 
-# Fusion sur code_postal
+agg_stat = df_stat_gratuit.merge(df_stat_payant,     on='code_postal', how='outer')
+agg_stat = agg_stat.merge(df_stat_2roues,            on='code_postal', how='outer')
+agg_stat = agg_stat.merge(df_stat_pmr,               on='code_postal', how='outer')
+agg_stat = agg_stat.merge(df_stat_electrique,        on='code_postal', how='outer')
+
 df_fusion = agg_arrets.merge(agg_taxi, on='code_postal', how='outer')
 df_fusion = df_fusion.merge(agg_stat,  on='code_postal', how='outer')
 df_fusion = df_fusion.fillna(0)
 
-# Ajout arrondissement
 df_fusion['arrondissement'] = df_fusion['code_postal'].astype(int) - 75000
 df_fusion = df_fusion.sort_values('arrondissement').reset_index(drop=True)
 
-df_fusion.to_parquet(f'{SILVER}/indicateur_mobilite_silver.parquet', index=False)
-print(f"✅ Fusion créée : {SILVER}/indicateur_mobilite_silver.parquet")
-print(f"   Shape : {df_fusion.shape}")
-print(f"   Colonnes : {list(df_fusion.columns)}")
+print(f"Shape fusion : {df_fusion.shape}")
 print(df_fusion.to_string(index=False))
+
+parquet_path = f'{SILVER}/indicateur_mobilite_silver.parquet'
+df_fusion.to_parquet(parquet_path, index=False)
+print(f'✓ Parquet : {parquet_path}')
+
+engine = create_engine(PG_URL)
+with engine.connect() as conn:
+    conn.execute(text("CREATE SCHEMA IF NOT EXISTS silver;"))
+    conn.execute(text("DROP TABLE IF EXISTS silver.indicateur_mobilite CASCADE;"))
+    conn.commit()
+
+df_fusion.to_sql('indicateur_mobilite', engine, if_exists='replace', index=False, schema='silver')
+print(f'✓ PostgreSQL : table silver.indicateur_mobilite ({len(df_fusion)} lignes)')
+
+client = MongoClient(MONGO_URL)
+client.drop_database('silver')
+mongo = client[MONGO_DB]
+
+def make_geo_point(lon, lat):
+    return {'type': 'Point', 'coordinates': [float(lon), float(lat)]}
+
+df_arrets_valid = df_arrets.dropna(subset=['stop_lat', 'stop_lon']).copy()
+df_taxi_valid   = df_taxi.dropna(subset=['lat', 'lon']).copy()
+
+arrets_docs = [
+    {
+        'code_postal' : int(r.code_postal),
+        'type'        : 'arret',
+        'stop_id'     : r.stop_id,
+        'geo'         : make_geo_point(r.stop_lon, r.stop_lat)
+    }
+    for r in df_arrets_valid.itertuples()
+]
+
+taxi_docs = [
+    {
+        'code_postal' : int(r.code_postal),
+        'type'        : 'borne_taxi',
+        'borne_id'    : r.borne_id,
+        'geo'         : make_geo_point(r.lon, r.lat)
+    }
+    for r in df_taxi_valid.itertuples()
+]
+
+docs_mongo = arrets_docs + taxi_docs
+mongo['indicateur_mobilite'].insert_many(docs_mongo)
+print(f'✓ MongoDB Atlas : collection indicateur_mobilite ({len(docs_mongo)} documents)')
+print(f'   dont arrets     : {len(arrets_docs)}')
+print(f'   dont bornes taxi: {len(taxi_docs)}')
+
+print('\n=== SILVER mobilité OK ===')
