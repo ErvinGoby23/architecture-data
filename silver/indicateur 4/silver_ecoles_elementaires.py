@@ -7,7 +7,7 @@ import pandas as pd
 import os
 
 # ── 1. Chargement ──────────────────────────────────────────────────────────
-print("📥 Chargement des données...")
+print("Chargement des données...")
 df = pd.read_csv(
     '../../brute/etablissements-scolaires-ecoles-elementaires.csv',
     sep=None, engine='python'
