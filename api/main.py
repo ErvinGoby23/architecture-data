@@ -1,15 +1,22 @@
+"""
+main.py — Urban Data Explorer API
+"""
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 from pymongo import MongoClient
-import pandas as pd
+from typing import Optional
+import os
+from dotenv import load_dotenv
 
-# ── CONFIG ──────────────────────────────────────────────
-PG_URL    = 'postgresql://postgres:postgres@localhost:5432/postgres'
-MONGO_URL = 'mongodb://localhost:27017'
-MONGO_DB  = 'urban_data'
+load_dotenv()
 
-app = FastAPI(title="Urban Data Explorer API", version="1.0.0")
+PG_URL    = os.getenv("PG_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
+MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
+MONGO_DB  = os.getenv("MONGO_DB", "urban_data")
+
+app = FastAPI(title="Urban Data Explorer API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,110 +26,112 @@ app.add_middleware(
 )
 
 engine = create_engine(PG_URL)
-mongo  = MongoClient(MONGO_URL)[MONGO_DB]
+mongo  = MongoClient(MONGO_URL)
 
-# ── ROUTES CONNECTIVITÉ ──────────────────────────────────
 
 @app.get("/")
 def root():
-    return {"message": "Urban Data Explorer API", "version": "1.0.0"}
+    return {"message": "Urban Data Explorer API", "version": "2.0.0"}
 
-@app.get("/connectivite/score")
-def get_score_connectivite(arrondissement: int = Query(None, description="ex: 75101")):
-    """Score de connectivité global par arrondissement"""
-    with engine.connect() as conn:
-        if arrondissement:
-            result = conn.execute(text("""
-                SELECT * FROM gold.score_connectivite
-                WHERE code_arrondissement = :arr
-            """), {"arr": arrondissement})
-        else:
-            result = conn.execute(text("""
-                SELECT * FROM gold.score_connectivite
-                ORDER BY score_connectivite DESC
-            """))
-        rows = [dict(r._mapping) for r in result]
-    if not rows:
-        raise HTTPException(status_code=404, detail="Arrondissement non trouvé")
-    return rows
 
-@app.get("/connectivite/fibre")
-def get_fibre(arrondissement: int = Query(None)):
-    """Taux de couverture fibre par arrondissement"""
-    with engine.connect() as conn:
-        if arrondissement:
-            result = conn.execute(text("""
-                SELECT * FROM silver.fibre_paris
-                WHERE code_arrondissement = :arr
-            """), {"arr": arrondissement})
-        else:
-            result = conn.execute(text("""
-                SELECT * FROM silver.fibre_paris
-                ORDER BY taux_fibre_pct DESC
-            """))
-        rows = [dict(r._mapping) for r in result]
-    if not rows:
-        raise HTTPException(status_code=404, detail="Arrondissement non trouvé")
-    return rows
+# ── INDICATEUR 1 — MOBILITÉ ──────────────────────────────────────────────────
 
-@app.get("/connectivite/antennes")
-def get_antennes(arrondissement: int = Query(None)):
-    """Antennes agrégées par arrondissement"""
-    with engine.connect() as conn:
-        if arrondissement:
-            result = conn.execute(text("""
-                SELECT * FROM silver.antennes_paris
-                WHERE code_arrondissement = :arr
-            """), {"arr": arrondissement})
-        else:
-            result = conn.execute(text("""
-                SELECT * FROM silver.antennes_paris
-                ORDER BY nb_antennes DESC
-            """))
-        rows = [dict(r._mapping) for r in result]
-    if not rows:
-        raise HTTPException(status_code=404, detail="Arrondissement non trouvé")
-    return rows
-
-@app.get("/connectivite/antennes/detail")
-def get_antennes_detail(
-    arrondissement: int = Query(None),
-    operateur: str = Query(None)
+@app.get("/mobilite")
+def get_mobilite(
+    code_postal: Optional[int] = Query(None)
 ):
-    """Détail de chaque antenne avec géométrie (MongoDB)"""
+    with engine.connect() as conn:
+        if code_postal:
+            result = conn.execute(text(
+                "SELECT * FROM gold.score_mobilite WHERE code_postal = :cp"
+            ), {"cp": code_postal})
+        else:
+            result = conn.execute(text(
+                "SELECT * FROM gold.score_mobilite ORDER BY rang"
+            ))
+        rows = [dict(r._mapping) for r in result]
+    if not rows:
+        raise HTTPException(status_code=404, detail="Arrondissement non trouvé")
+    return rows
+
+
+@app.get("/mobilite/points/geojson")
+def get_mobilite_points_geojson(
+    code_postal: Optional[int] = Query(None),
+    type_point:  Optional[str] = Query(None)
+):
     query = {}
-    if arrondissement:
-        query["code_arrondissement"] = arrondissement
-    if operateur:
-        query["operateur"] = operateur.upper()
+    if code_postal:
+        query["code_postal"] = code_postal
+    if type_point:
+        query["type"] = type_point
 
-    docs = list(mongo["antennes_detail"].find(query, {"_id": 0}))
-    if not docs:
-        raise HTTPException(status_code=404, detail="Aucune antenne trouvée")
-    return docs
+    docs = list(mongo["silver"]["indicateur_mobilite"].find(query, {"_id": 0}))
 
-@app.get("/connectivite/antennes/geojson")
-def get_antennes_geojson(arrondissement: int = Query(None)):
-    """Antennes au format GeoJSON pour la carte"""
-    query = {}
-    if arrondissement:
-        query["code_arrondissement"] = arrondissement
-
-    docs = list(mongo["antennes_detail"].find(query, {"_id": 0}))
-
-    features = []
-    for doc in docs:
-        if doc.get("geo_shape"):
-            features.append({
-                "type": "Feature",
-                "geometry": doc["geo_shape"],
-                "properties": {
-                    "code_site": doc.get("code_site"),
-                    "adresse": doc.get("adresse"),
-                    "operateur": doc.get("operateur"),
-                    "type": doc.get("type"),
-                    "code_arrondissement": doc.get("code_arrondissement")
-                }
-            })
-
+    features = [
+        {
+            "type": "Feature",
+            "geometry": doc["geo"],
+            "properties": {
+            "code_postal": doc.get("code_postal"),
+            "type":        doc.get("type"),
+            "code_site":   doc.get("code_site"),
+            "generation":  doc.get("generation"),
+            "operateur":   doc.get("operateur"),
+        }
+        }
+        for doc in docs
+        if doc.get("geo")
+    ]
     return {"type": "FeatureCollection", "features": features}
+
+
+# ── INDICATEUR 2 — CONNECTIVITÉ ──────────────────────────────────────────────
+
+@app.get("/connectivite")
+def get_connectivite():
+    with engine.connect() as conn:
+        result = conn.execute(text(
+            "SELECT * FROM gold.score_connectivite ORDER BY rang"
+        ))
+        rows = [dict(r._mapping) for r in result]
+    if not rows:
+        raise HTTPException(status_code=404, detail="Arrondissement non trouvé")
+    return rows
+
+
+@app.get("/connectivite/points/geojson")
+def get_connectivite_points_geojson(
+    code_postal: Optional[int] = Query(None)
+):
+    query = {}
+    if code_postal:
+        query["code_postal"] = code_postal
+
+    docs = list(mongo["silver"]["indicateur_connectivite"].find(query, {"_id": 0}))
+
+    features = [
+        {
+            "type": "Feature",
+            "geometry": doc["geo"],
+            "properties": {
+                "code_postal": doc.get("code_postal"),
+                "type":        doc.get("type"),
+                "code_site":   doc.get("code_site"),
+            }
+        }
+        for doc in docs
+        if doc.get("geo")
+    ]
+    return {"type": "FeatureCollection", "features": features}
+
+
+
+# exemple de date
+# @router.get("/mobilite")
+# @router.get("/mobilite")
+# def get_mobilite(year: int = None):
+#     query = "SELECT * FROM gold_mobilite"
+#     if year:
+#         query += f" WHERE EXTRACT(YEAR FROM date) = {year}"
+#     ...
