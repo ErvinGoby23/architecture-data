@@ -64,8 +64,12 @@ df_surface['surface_km2'] = (df_surface['surface_m2'] / 1_000_000).round(4)
 df = df.merge(df_surface, on='arrondissement', how='left')
 
 # ==========================================================================
-# 3. INDICATEURS PAR KM²
+# 3. CALCULS MÉTIER (Gold uniquement)
 # ==========================================================================
+df['taux_fibre'] = (df['locaux_fibres_T4_2025'] / df['locaux_total'] * 100).round(2)
+df['taux_5g']    = (df['nb_antennes_5g'] / df['nb_antennes'] * 100).round(2)
+df['taux_4g']    = (df['nb_antennes_4g'] / df['nb_antennes'] * 100).round(2)
+
 df['nb_antennes_par_km2']    = (df['nb_antennes']    / df['surface_km2']).round(2)
 df['nb_antennes_5g_par_km2'] = (df['nb_antennes_5g'] / df['surface_km2']).round(2)
 df['nb_antennes_4g_par_km2'] = (df['nb_antennes_4g'] / df['surface_km2']).round(2)

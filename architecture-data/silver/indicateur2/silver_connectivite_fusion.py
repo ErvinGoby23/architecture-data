@@ -1,5 +1,5 @@
 """
-silver_connectivite_fusion.py — Pipeline Silver · Indicateur 2 : Connectivité (Fusion - DATE CORRIGÉE)
+silver_connectivite_fusion.py — Pipeline Silver · Indicateur 2 : Connectivité (Fusion)
 Urban Data Explorer
 """
 
@@ -41,6 +41,7 @@ os.makedirs(SILVER_OUTPUT_DIR, exist_ok=True)
 PG_URL    = os.getenv('PG_URL')
 MONGO_URL = os.getenv('MONGO_URL')
 MONGO_DB  = 'silver'
+
 # ==========================================================================
 # 1. CHARGEMENT Parquet
 # ==========================================================================
@@ -56,6 +57,7 @@ df_antennes = df_antennes[
 
 print(f"Fibre    : {df_fibre.shape}")
 print(f"Antennes : {df_antennes.shape}")
+
 # ==========================================================================
 # 2. AGRÉGATION ANTENNES — vectorisé
 # ==========================================================================
@@ -67,6 +69,7 @@ agg_antennes = df_antennes.groupby('code_postal').agg(
     nb_antennes_5g = ('has_5g',   'sum'),
 ).reset_index()
 
+# -- Opérateur leader (pondéré par génération) ----------------------------
 POIDS_GENERATION = {'5G': 4, '4G': 3, '3G': 2, '2G': 1}
 df_antennes['poids'] = df_antennes['generation'].map(POIDS_GENERATION).fillna(1)
 
@@ -83,31 +86,52 @@ operateur_leader = (
 
 agg_antennes = agg_antennes.merge(operateur_leader, on='code_postal', how='left')
 
+# -- Répartition par opérateur --------------------------------------------
+OPERATEURS = {
+    'ORANGE':           'nb_antennes_orange',
+    'SFR':              'nb_antennes_sfr',
+    'FREE MOBILE':      'nb_antennes_free',
+    'BOUYGUES TELECOM': 'nb_antennes_bouygues',
+}
 
+operateurs_pivot = (
+    df_antennes.groupby(['code_postal', 'operateur'])
+    .size()
+    .unstack(fill_value=0)
+    .reset_index()
+)
+
+for op_name, col_name in OPERATEURS.items():
+    if op_name in operateurs_pivot.columns:
+        operateurs_pivot = operateurs_pivot.rename(columns={op_name: col_name})
+    else:
+        operateurs_pivot[col_name] = 0
+
+cols_op = ['code_postal'] + list(OPERATEURS.values())
+operateurs_pivot = operateurs_pivot[cols_op]
+
+agg_antennes = agg_antennes.merge(operateurs_pivot, on='code_postal', how='left')
+
+print(f"Colonnes agg_antennes : {list(agg_antennes.columns)}")
 
 # ==========================================================================
 # 3. FUSION FIBRE + ANTENNES — vectorisé
+# Silver : agrégation et structuration uniquement, pas de calculs métier
 # ==========================================================================
 df_fusion = df_fibre.merge(agg_antennes, on='code_postal', how='outer')
 df_fusion['arrondissement'] = df_fusion['code_postal'].astype(int) - 75000
 df_fusion = df_fusion.sort_values('arrondissement').reset_index(drop=True)
 df_fusion = df_fusion.fillna(0)
 
-df_fusion['taux_fibre'] = (df_fusion['locaux_fibres_T4_2025'] / df_fusion['locaux_total'] * 100).round(2).fillna(0)
-df_fusion['taux_5g']    = (df_fusion['nb_antennes_5g'] / df_fusion['nb_antennes'] * 100).round(2).fillna(0)
-df_fusion['taux_4g']    = (df_fusion['nb_antennes_4g'] / df_fusion['nb_antennes'] * 100).round(2).fillna(0)
-
 print(f"\nShape fusion : {df_fusion.shape}")
 print(f"Colonnes : {list(df_fusion.columns)}")
-
-
 
 # ==========================================================================
 # 4. EXPORTS PARQUET & POSTGRESQL
 # ==========================================================================
 parquet_path = os.path.join(SILVER_OUTPUT_DIR, 'indicateur_connectivite_silver.parquet')
 df_fusion.to_parquet(parquet_path, index=False)
-print(f'\n✓ Parquet final sauvegardé dans : {parquet_path}')
+print(f'\nParquet final sauvegarde : {parquet_path}')
 
 try:
     engine = create_engine(PG_URL)
@@ -116,13 +140,13 @@ try:
         conn.execute(text('DROP TABLE IF EXISTS silver.indicateur_connectivite CASCADE;'))
         conn.commit()
     df_fusion.to_sql('indicateur_connectivite', engine, if_exists='replace', index=False, schema='silver')
-    print(f'✓ PostgreSQL : silver.indicateur_connectivite ({len(df_fusion)} lignes)')
+    print(f'PostgreSQL : silver.indicateur_connectivite ({len(df_fusion)} lignes)')
 except Exception as e:
-    print(f'❌ PostgreSQL indisponible — export ignoré : {e}')
+    print(f'PostgreSQL indisponible — export ignore : {e}')
     print('   Le Parquet reste la source canonique.')
 
 # ==========================================================================
-# 5. MONGODB — insertion parallèle par chunks (local)
+# 5. MONGODB — insertion parallèle par chunks
 # ==========================================================================
 try:
     client = MongoClient(MONGO_URL)
@@ -152,12 +176,12 @@ try:
             for f in futures:
                 f.result()
 
-    print(f'✓ MongoDB : silver.indicateur_connectivite ({len(antennes_docs)} documents)')
+    print(f'MongoDB : silver.indicateur_connectivite ({len(antennes_docs)} documents)')
 
     mongo['indicateur_connectivite'].create_index([("geo", GEOSPHERE)])
-    print('✓ MongoDB : Index 2dsphere créé sur le champ "geo"')
+    print('MongoDB : Index 2dsphere cree sur le champ "geo"')
 except Exception as e:
-    print(f'❌ MongoDB indisponible — export géospatial ignoré : {e}')
+    print(f'MongoDB indisponible — export geospatial ignore : {e}')
     print('   Le Parquet et PostgreSQL restent disponibles.')
 
-print('\n=== SILVER connectivité OK ===')
+print('\n=== SILVER connectivite OK ===')

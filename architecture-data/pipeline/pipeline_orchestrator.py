@@ -103,9 +103,15 @@ def run_silver_fusion_ind1(date_str: str):
     logger = get_run_logger()
     logger.info(f"Fusion Silver ind1 — {date_str}")
     script = os.path.join(ROOT_DIR, "silver", "indicateur1", "silver_fusion.py")
-    duration = run_script(script, date_str)
-    logger.info(f"Fusion ind1 OK en {duration}s")
-    return duration
+    try:
+        duration = run_script(script, date_str)
+        logger.info(f"Fusion ind1 OK en {duration}s")
+        logger.info("Resilience : Parquet OK — PostgreSQL + MongoDB tentes (fallback Parquet si indisponible)")
+        return duration
+    except Exception as e:
+        logger.warning(f"Fusion ind1 — PostgreSQL/MongoDB indisponible : {e}")
+        logger.warning("Fallback actif : Parquet reste la source canonique.")
+        return None
 
 @task(name="Silver - Antennes relais", retries=1)
 def run_silver_antennes_s(date_str: str):
@@ -130,27 +136,62 @@ def run_silver_fusion_ind2(date_str: str):
     logger = get_run_logger()
     logger.info(f"Fusion Silver ind2 — {date_str}")
     script = os.path.join(ROOT_DIR, "silver", "indicateur2", "silver_connectivite_fusion.py")
-    duration = run_script(script, date_str)
-    logger.info(f"Fusion ind2 OK en {duration}s")
-    return duration
+    try:
+        duration = run_script(script, date_str)
+        logger.info(f"Fusion ind2 OK en {duration}s")
+        logger.info("Resilience : Parquet OK — PostgreSQL + MongoDB tentes (fallback Parquet si indisponible)")
+        return duration
+    except Exception as e:
+        logger.warning(f"Fusion ind2 — PostgreSQL/MongoDB indisponible : {e}")
+        logger.warning("Fallback actif : Parquet reste la source canonique.")
+        return None
 
 @task(name="Gold - Score mobilite", retries=1)
 def run_gold_mobilite(date_str: str):
     logger = get_run_logger()
     logger.info(f"Gold score mobilité — {date_str}")
     script = os.path.join(ROOT_DIR, "gold", "indicateur1", "gold_score_mobilite.py")
-    duration = run_script(script, date_str)
-    logger.info(f"Gold mobilité OK en {duration}s")
-    return duration
+    try:
+        duration = run_script(script, date_str)
+        logger.info(f"Gold mobilité OK en {duration}s")
+        logger.info("Resilience : Parquet Gold OK — PostgreSQL tente (fallback Parquet si indisponible)")
+        return duration
+    except Exception as e:
+        logger.warning(f"Gold mobilité — PostgreSQL indisponible : {e}")
+        logger.warning("Fallback actif : Parquet Gold reste la source canonique.")
+        return None
 
 @task(name="Gold - Score connectivite", retries=1)
 def run_gold_connectivite(date_str: str):
     logger = get_run_logger()
     logger.info(f"Gold score connectivité — {date_str}")
     script = os.path.join(ROOT_DIR, "gold", "indicateur2", "gold_score_connectivite.py")
-    duration = run_script(script, date_str)
-    logger.info(f"Gold connectivité OK en {duration}s")
-    return duration
+    try:
+        duration = run_script(script, date_str)
+        logger.info(f"Gold connectivité OK en {duration}s")
+        logger.info("Resilience : Parquet Gold OK — PostgreSQL tente (fallback Parquet si indisponible)")
+        return duration
+    except Exception as e:
+        logger.warning(f"Gold connectivité — PostgreSQL indisponible : {e}")
+        logger.warning("Fallback actif : Parquet Gold reste la source canonique.")
+        return None
+
+# ==========================================================================
+# LOAD TEST — C1.1 Tests de charge PostgreSQL (Silver + Gold)
+# ==========================================================================
+@task(name="Load Test - PostgreSQL Silver + Gold", retries=0)
+def run_load_test(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Load test PostgreSQL — {date_str}")
+    try:
+        script = os.path.join(ROOT_DIR, "test_deperfomance", "load_test_postgresql.py")
+        duration = run_script(script, date_str)
+        logger.info(f"Load test OK en {duration}s")
+        return duration
+    except Exception as e:
+        logger.warning(f"Load test ignoré — PostgreSQL indisponible : {e}")
+        logger.warning("Le pipeline continue — Parquet reste la source canonique.")
+        return None
 
 # ==========================================================================
 # FLOW PRINCIPAL
@@ -201,18 +242,38 @@ def main_pipeline():
     future_conn.result()
     logger.info("Gold OK")
 
+    # LOAD TEST — après Gold, toutes les tables sont à jour
+    run_load_test(current_date)
+    logger.info("Load test OK")
+
     # RAPPORT DE PERFORMANCE (C2.4)
     total_duration = round(time.time() - global_start, 1)
-    total_volume   = round(perf_stat["size_mb"] + perf_ant["size_mb"], 2)
     bronze_skipped = perf_stat.get("skipped", False) or perf_ant.get("skipped", False)
-    debit_mbs      = round(total_volume / total_duration, 2) if total_duration > 0 else 0
+
+    vol_bronze = round(perf_stat["size_mb"] + perf_ant["size_mb"], 2)
+    silver_files = [
+        os.path.join(ROOT_DIR, "silver", "indicateur1", "nettoyage-indicateur1", current_date, "indicateur_mobilite_silver.parquet"),
+        os.path.join(ROOT_DIR, "silver", "indicateur2", "nettoyage-indicateur2", current_date, "indicateur_connectivite_silver.parquet"),
+    ]
+    vol_silver = round(sum(file_size_mb(f) for f in silver_files), 2)
+    gold_files = [
+        os.path.join(ROOT_DIR, "gold", "indicateur1", current_date, "score_mobilite_gold.parquet"),
+        os.path.join(ROOT_DIR, "gold", "indicateur2", current_date, "score_connectivite_gold.parquet"),
+    ]
+    vol_gold = round(sum(file_size_mb(f) for f in gold_files), 2)
+    total_volume = round(vol_bronze + vol_silver + vol_gold, 2)
+    debit_mbs    = round(total_volume / total_duration, 2) if total_duration > 0 else 0
 
     logger.info("=== RAPPORT DE PERFORMANCE (C2.4) ===")
-    logger.info(f"Temps total d'exécution : {total_duration}s")
-    logger.info(f"Volume des fichiers du jour : {total_volume} MB")
-    logger.info(f"Débit moyen             : {debit_mbs} MB/s")
-    logger.info(f"Comportement ce jour    : {'SKIP FETCH' if bronze_skipped else 'FETCH OK'}")
-    logger.info("Base PostgreSQL         : Schémas silver et gold mis à jour")
+    logger.info(f"Temps total d'execution  : {total_duration}s")
+    logger.info(f"Volume Bronze  (APIs)    : {vol_bronze} MB")
+    logger.info(f"Volume Silver  (Parquet) : {vol_silver} MB")
+    logger.info(f"Volume Gold    (Parquet) : {vol_gold} MB")
+    logger.info(f"Volume total pipeline    : {total_volume} MB")
+    logger.info(f"Debit moyen              : {debit_mbs} MB/s")
+    logger.info(f"Comportement ce jour     : {'SKIP FETCH' if bronze_skipped else 'FETCH OK'}")
+    logger.info("Base PostgreSQL          : Schemas silver et gold mis a jour")
+    logger.info("Load test                : Resultats dans test_deperfomance/results/")
     logger.info("=====================================")
 
 

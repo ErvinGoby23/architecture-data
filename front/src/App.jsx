@@ -2,8 +2,13 @@ import { useState, useEffect } from 'react'
 import MapView  from './components/MapView'
 import Sidebar  from './components/Sidebar'
 import { INDICATEURS } from './indicateurs/index'
-import { useScores }   from './hooks/useScores'
+import { fetchScoresMobilite, fetchScoresConnectivite } from './api/index'
 import './index.css'
+
+const SCORES_FETCHERS = {
+  mobilite:     fetchScoresMobilite,
+  connectivite: fetchScoresConnectivite,
+}
 
 export default function App() {
   const [activeIndicateur, setActiveIndicateur] = useState(INDICATEURS[0])
@@ -13,8 +18,17 @@ export default function App() {
     INDICATEURS[0].pointTypes?.map(p => p.id) ?? []
   )
   const [year, setYear] = useState(null)
+  const [scores, setScores]   = useState([])
+  const [loading, setLoading] = useState(true)
 
-  const { scores, loading } = useScores(activeIndicateur, year)
+  useEffect(() => {
+    const fetcher = SCORES_FETCHERS[activeIndicateur.id]
+    if (!fetcher) return
+    setLoading(true)
+    fetcher()
+      .then(data => { setScores(data); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [activeIndicateur.id, year])
 
   useEffect(() => {
     setVisibleTypes(activeIndicateur.pointTypes?.map(p => p.id) ?? [])

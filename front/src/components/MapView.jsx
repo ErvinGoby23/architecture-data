@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
+// Ajoute l'import en haut
+import { fetchPointsMobilite, fetchPointsConnectivite } from '../api/index'
 
-const API = 'http://localhost:8000'
+const POINTS_FETCHERS = {
+  mobilite:     fetchPointsMobilite,
+  connectivite: fetchPointsConnectivite,
+}
 const PARIS_GEOJSON_URL = 'https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/arrondissements/exports/geojson?lang=fr'
 
 const MODES = [
@@ -228,21 +233,23 @@ useEffect(() => {
   map.current.setPaintProperty('arrondissements-3d', 'fill-extrusion-opacity', is3D ? 0.75 : 0.85)
 }, [scores, scoreKey, activeColor, activeIndicateur?.darkColor, mapReady, is3D, selected])
 
-  useEffect(() => {
-    clearMarkers()
-    if (!mapReady || !activeIndicateur?.pointsEndpoint) return
-    if (allPointsCache.current[activeIndicateur.id]) {
+useEffect(() => {
+  clearMarkers()
+  if (!mapReady || !activeIndicateur?.pointsEndpoint) return
+  if (allPointsCache.current[activeIndicateur.id]) {
+    if (selected) showMarkersForCP(selected)
+    return
+  }
+  const fetcher = POINTS_FETCHERS[activeIndicateur.id]
+  if (!fetcher) return
+  fetcher()
+    .then(geojson => {
+      allPointsCache.current[activeIndicateur.id] = geojson
       if (selected) showMarkersForCP(selected)
-      return
-    }
-    fetch(`${API}${activeIndicateur.pointsEndpoint}`)
-      .then(r => r.json())
-      .then(geojson => {
-        allPointsCache.current[activeIndicateur.id] = geojson
-        if (selected) showMarkersForCP(selected)
-      })
-      .catch(console.error)
-  }, [activeIndicateur?.id, mapReady])
+    })
+    .catch(console.error)
+}, [activeIndicateur?.id, mapReady])
+
 
   useEffect(() => {
     if (!mapReady) return

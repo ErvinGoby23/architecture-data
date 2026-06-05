@@ -192,22 +192,18 @@ stat_df_tmp['geo'] = [
 ]
 stat_docs = stat_df_tmp[['code_postal', 'type', 'id', 'nom_voie', 'regime_priorite', 'places_relevees', 'geo']].to_dict(orient='records')
 
-# --- 5.4 Fonctions d'insertion par chunks ---
+# --- 5.4 Fonctions d'insertion optimisées (ordered=False = parallélisme côté Atlas) ---
 def insert_arrets():
     if arrets_docs:
-        chunk_size = 500
-        for i in range(0, len(arrets_docs), chunk_size):
-            mongo['indicateur_mobilite'].insert_many(arrets_docs[i:i+chunk_size])
+        mongo['indicateur_mobilite'].insert_many(arrets_docs, ordered=False)
 
 def insert_taxi():
     if taxi_docs:
-        mongo['indicateur_mobilite'].insert_many(taxi_docs)
+        mongo['indicateur_mobilite'].insert_many(taxi_docs, ordered=False)
 
 def insert_stationnement():
     if stat_docs:
-        chunk_size = 500
-        for i in range(0, len(stat_docs), chunk_size):
-            mongo['indicateur_mobilite'].insert_many(stat_docs[i:i+chunk_size])
+        mongo['indicateur_mobilite'].insert_many(stat_docs, ordered=False)
 
 # --- 5.5 Exécution multithréadée + résilience ---
 print("--- INSERTION DES DOCUMENTS GEOMETRIQUES PROPRES DANS MONGODB ---")
