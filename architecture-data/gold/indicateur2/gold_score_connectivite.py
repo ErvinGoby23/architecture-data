@@ -60,7 +60,7 @@ col_num     = next((c for c in df_arr.columns if 'numéro' in c.lower() and 'ins
 df_surface = df_arr[[col_num, col_surface]].copy()
 df_surface.columns = ['arrondissement', 'surface_m2']
 df_surface['surface_km2'] = (df_surface['surface_m2'] / 1_000_000).round(4)
-
+df['arrondissement'] = df['code_postal'].astype(int) - 75000
 df = df.merge(df_surface, on='arrondissement', how='left')
 
 # ==========================================================================
