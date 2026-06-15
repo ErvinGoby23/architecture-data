@@ -185,7 +185,7 @@ export default function MapView({ scores, scoreKey, activeColor, activeIndicateu
             const props  = e.features[0].properties
             const arrNum = props.c_ar
             const cp     = arrNum ? 75000 + parseInt(arrNum) : null
-            const data   = (window.__ude_scores || []).find(s => s.arrondissement === parseInt(arrNum))
+            const data = (window.__ude_scores || []).find(s => s.code_postal === cp)
             popup.current.setLngLat(e.lngLat).setHTML(buildPopupHTML(arrNum, cp, data, window.__ude_indicateurId)).addTo(map.current)
             map.current.getCanvas().style.cursor = 'pointer'
           })

@@ -129,8 +129,7 @@ for col in ['nb_places_gratuit', 'nb_places_payant', 'nb_places_2roues', 'nb_pla
 df_fusion = agg_arrets.merge(agg_taxi, on='code_postal', how='outer')
 df_fusion = df_fusion.merge(agg_stat,  on='code_postal', how='outer')
 df_fusion = df_fusion.fillna(0)
-df_fusion['arrondissement'] = df_fusion['code_postal'].astype(int) - 75000
-df_fusion = df_fusion.sort_values('arrondissement').reset_index(drop=True)
+df_fusion = df_fusion.sort_values('code_postal').reset_index(drop=True)
 
 print(f"\nShape fusion : {df_fusion.shape}")
 print(f"Colonnes : {list(df_fusion.columns)}")

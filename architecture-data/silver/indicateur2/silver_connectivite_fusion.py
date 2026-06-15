@@ -119,8 +119,7 @@ print(f"Colonnes agg_antennes : {list(agg_antennes.columns)}")
 # Silver : agrégation et structuration uniquement, pas de calculs métier
 # ==========================================================================
 df_fusion = df_fibre.merge(agg_antennes, on='code_postal', how='outer')
-df_fusion['arrondissement'] = df_fusion['code_postal'].astype(int) - 75000
-df_fusion = df_fusion.sort_values('arrondissement').reset_index(drop=True)
+df_fusion = df_fusion.sort_values('code_postal').reset_index(drop=True)
 df_fusion = df_fusion.fillna(0)
 
 print(f"\nShape fusion : {df_fusion.shape}")
