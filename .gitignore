@@ -6,3 +6,5 @@ __pycache__/
 .env
 *.json
 *node_modules/
+!package.json
+!package-lock.json
