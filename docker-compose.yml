@@ -1,0 +1,37 @@
+services:
+  postgres-primary:
+    image: postgres
+    container_name: postgres-urban
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test123
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata-primary:/var/lib/postgresql
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=3
+      -c wal_keep_size=64
+
+  postgres-replica:
+    image: postgres
+    container_name: postgres-urban-replica
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test123
+      POSTGRES_DB: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata-replica:/var/lib/postgresql
+    depends_on:
+      - postgres-primary
+
+volumes:
+  pgdata-primary:
+    external: true
+    name: 44ae397f4bd230cc1856a529551e8c575c2afcd0df0c484d5f6ecc7864e6e2ae
+  pgdata-replica:

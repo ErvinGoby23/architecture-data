@@ -227,6 +227,7 @@ try:
 
     # --- 5.6 Index géospatial 2dsphere ---
     mongo['indicateur_mobilite'].create_index([("geo", GEOSPHERE)])
+    mongo['indicateur_mobilite'].create_index([("code_postal", 1)])
     print('✓ MongoDB : Index 2dsphere créé sur le champ "geo"')
 except Exception as e:
     print(f'❌ MongoDB indisponible — export géospatial ignoré : {e}')

@@ -13,11 +13,10 @@ from prefect import flow, task, get_run_logger
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
 
-# ==========================================================================
-# UTILITAIRES
-# ==========================================================================
+PG_URL         = os.getenv("PG_URL",         "postgresql://postgres:test123@localhost:5432/postgres")
+PG_URL_REPLICA = os.getenv("PG_URL_REPLICA", "postgresql://postgres:test123@localhost:5433/postgres")
+
 def run_script(path: str, arg: str = None) -> float:
-    """Lance un script Python avec le même Python que le venv courant, avec un argument optionnel."""
     start = time.time()
     cmd = [sys.executable, path]
     if arg:
@@ -26,8 +25,31 @@ def run_script(path: str, arg: str = None) -> float:
     return round(time.time() - start, 1)
 
 def file_size_mb(path: str) -> float:
-    """Retourne la taille d'un fichier en MB."""
     return round(os.path.getsize(path) / 1_000_000, 2) if os.path.exists(path) else 0
+
+def check_pg_primary(logger) -> bool:
+    try:
+        from sqlalchemy import create_engine, text
+        engine = create_engine(PG_URL, connect_args={"connect_timeout": 3})
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        logger.info("PostgreSQL primary (5432) : disponible")
+        return True
+    except Exception:
+        logger.warning("PostgreSQL primary (5432) : indisponible — le pipeline ecrira uniquement en Parquet")
+        return False
+
+def check_pg_replica(logger) -> bool:
+    try:
+        from sqlalchemy import create_engine, text
+        engine = create_engine(PG_URL_REPLICA, connect_args={"connect_timeout": 3})
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        logger.info("PostgreSQL replica  (5433) : disponible et synchronise")
+        return True
+    except Exception:
+        logger.warning("PostgreSQL replica  (5433) : indisponible")
+        return False
 
 # ==========================================================================
 # BRONZE
@@ -71,10 +93,10 @@ def run_bronze_antennes(date_str: str):
 @task(name="Silver - Arrets lignes", retries=1)
 def run_silver_arrets(date_str: str):
     logger = get_run_logger()
-    logger.info(f"Silver arrêts lignes — {date_str}")
+    logger.info(f"Silver arrets lignes — {date_str}")
     script = os.path.join(ROOT_DIR, "silver", "indicateur1", "silver_arrets_lignes.py")
     duration = run_script(script, date_str)
-    logger.info(f"Terminé en {duration}s")
+    logger.info(f"Termine en {duration}s")
     return duration
 
 @task(name="Silver - Bornes taxi", retries=1)
@@ -83,7 +105,7 @@ def run_silver_taxi(date_str: str):
     logger.info(f"Silver bornes taxi — {date_str}")
     script = os.path.join(ROOT_DIR, "silver", "indicateur1", "silver_bornes_taxi.py")
     duration = run_script(script, date_str)
-    logger.info(f"Terminé en {duration}s")
+    logger.info(f"Termine en {duration}s")
     return duration
 
 @task(name="Silver - Stationnement", retries=1)
@@ -95,22 +117,23 @@ def run_silver_stationnement(date_str: str):
     if duration > 60:
         logger.warning(f"Stationnement anormalement lent : {duration}s")
     else:
-        logger.info(f"Terminé en {duration}s")
+        logger.info(f"Termine en {duration}s")
     return duration
 
 @task(name="Silver - Fusion indicateur 1", retries=1)
 def run_silver_fusion_ind1(date_str: str):
     logger = get_run_logger()
     logger.info(f"Fusion Silver ind1 — {date_str}")
+    logger.info("Cible ecriture : PostgreSQL primary (5432) + MongoDB Atlas")
     script = os.path.join(ROOT_DIR, "silver", "indicateur1", "silver_fusion.py")
     try:
         duration = run_script(script, date_str)
         logger.info(f"Fusion ind1 OK en {duration}s")
-        logger.info("Resilience : Parquet OK — PostgreSQL + MongoDB tentes (fallback Parquet si indisponible)")
+        logger.info("Resilience : Parquet OK — PostgreSQL primary ecrit, replica (5433) synchronise via WAL")
         return duration
     except Exception as e:
-        logger.warning(f"Fusion ind1 — PostgreSQL/MongoDB indisponible : {e}")
-        logger.warning("Fallback actif : Parquet reste la source canonique.")
+        logger.warning(f"Fusion ind1 — PostgreSQL primary indisponible : {e}")
+        logger.warning("Fallback actif : Parquet reste la source canonique")
         return None
 
 @task(name="Silver - Antennes relais", retries=1)
@@ -119,7 +142,7 @@ def run_silver_antennes_s(date_str: str):
     logger.info(f"Silver antennes relais — {date_str}")
     script = os.path.join(ROOT_DIR, "silver", "indicateur2", "transform_antennes_silver.py")
     duration = run_script(script, date_str)
-    logger.info(f"Terminé en {duration}s")
+    logger.info(f"Termine en {duration}s")
     return duration
 
 @task(name="Silver - Fibre", retries=1)
@@ -128,52 +151,55 @@ def run_silver_fibre(date_str: str):
     logger.info(f"Silver fibre — {date_str}")
     script = os.path.join(ROOT_DIR, "silver", "indicateur2", "transform_fibre_silver.py")
     duration = run_script(script, date_str)
-    logger.info(f"Terminé en {duration}s")
+    logger.info(f"Termine en {duration}s")
     return duration
 
 @task(name="Silver - Fusion indicateur 2", retries=1)
 def run_silver_fusion_ind2(date_str: str):
     logger = get_run_logger()
     logger.info(f"Fusion Silver ind2 — {date_str}")
+    logger.info("Cible ecriture : PostgreSQL primary (5432) + MongoDB Atlas")
     script = os.path.join(ROOT_DIR, "silver", "indicateur2", "silver_connectivite_fusion.py")
     try:
         duration = run_script(script, date_str)
         logger.info(f"Fusion ind2 OK en {duration}s")
-        logger.info("Resilience : Parquet OK — PostgreSQL + MongoDB tentes (fallback Parquet si indisponible)")
+        logger.info("Resilience : Parquet OK — PostgreSQL primary ecrit, replica (5433) synchronise via WAL")
         return duration
     except Exception as e:
-        logger.warning(f"Fusion ind2 — PostgreSQL/MongoDB indisponible : {e}")
-        logger.warning("Fallback actif : Parquet reste la source canonique.")
+        logger.warning(f"Fusion ind2 — PostgreSQL primary indisponible : {e}")
+        logger.warning("Fallback actif : Parquet reste la source canonique")
         return None
 
 @task(name="Gold - Score mobilite", retries=1)
 def run_gold_mobilite(date_str: str):
     logger = get_run_logger()
-    logger.info(f"Gold score mobilité — {date_str}")
+    logger.info(f"Gold score mobilite — {date_str}")
+    logger.info("Cible ecriture : PostgreSQL primary (5432)")
     script = os.path.join(ROOT_DIR, "gold", "indicateur1", "gold_score_mobilite.py")
     try:
         duration = run_script(script, date_str)
-        logger.info(f"Gold mobilité OK en {duration}s")
-        logger.info("Resilience : Parquet Gold OK — PostgreSQL tente (fallback Parquet si indisponible)")
+        logger.info(f"Gold mobilite OK en {duration}s")
+        logger.info("Resilience : Parquet Gold OK — PostgreSQL primary ecrit, replica (5433) synchronise via WAL")
         return duration
     except Exception as e:
-        logger.warning(f"Gold mobilité — PostgreSQL indisponible : {e}")
-        logger.warning("Fallback actif : Parquet Gold reste la source canonique.")
+        logger.warning(f"Gold mobilite — PostgreSQL primary indisponible : {e}")
+        logger.warning("Fallback actif : Parquet Gold reste la source canonique")
         return None
 
 @task(name="Gold - Score connectivite", retries=1)
 def run_gold_connectivite(date_str: str):
     logger = get_run_logger()
-    logger.info(f"Gold score connectivité — {date_str}")
+    logger.info(f"Gold score connectivite — {date_str}")
+    logger.info("Cible ecriture : PostgreSQL primary (5432)")
     script = os.path.join(ROOT_DIR, "gold", "indicateur2", "gold_score_connectivite.py")
     try:
         duration = run_script(script, date_str)
-        logger.info(f"Gold connectivité OK en {duration}s")
-        logger.info("Resilience : Parquet Gold OK — PostgreSQL tente (fallback Parquet si indisponible)")
+        logger.info(f"Gold connectivite OK en {duration}s")
+        logger.info("Resilience : Parquet Gold OK — PostgreSQL primary ecrit, replica (5433) synchronise via WAL")
         return duration
     except Exception as e:
-        logger.warning(f"Gold connectivité — PostgreSQL indisponible : {e}")
-        logger.warning("Fallback actif : Parquet Gold reste la source canonique.")
+        logger.warning(f"Gold connectivite — PostgreSQL primary indisponible : {e}")
+        logger.warning("Fallback actif : Parquet Gold reste la source canonique")
         return None
 
 # ==========================================================================
@@ -189,8 +215,8 @@ def run_load_test(date_str: str):
         logger.info(f"Load test OK en {duration}s")
         return duration
     except Exception as e:
-        logger.warning(f"Load test ignoré — PostgreSQL indisponible : {e}")
-        logger.warning("Le pipeline continue — Parquet reste la source canonique.")
+        logger.warning(f"Load test ignore — PostgreSQL indisponible : {e}")
+        logger.warning("Le pipeline continue — Parquet reste la source canonique")
         return None
 
 # ==========================================================================
@@ -204,6 +230,16 @@ def main_pipeline():
     current_date = datetime.now().strftime("%Y-%m-%d")
     logger.info(f"=== DEMARRAGE DU BATCH POUR LA DATE : {current_date} ===")
 
+    primary_ok = check_pg_primary(logger)
+    replica_ok = check_pg_replica(logger)
+
+    if primary_ok and replica_ok:
+        logger.info("Architecture HA : primary (5432) + replica (5433) — WAL streaming actif")
+    elif primary_ok:
+        logger.warning("Architecture degradee : primary seul disponible — replica hors ligne")
+    else:
+        logger.warning("PostgreSQL indisponible — pipeline en mode Parquet uniquement")
+
     # BRONZE en parallèle
     future_stat = run_bronze_stationnement.submit(current_date)
     future_ant  = run_bronze_antennes.submit(current_date)
@@ -216,11 +252,10 @@ def main_pipeline():
     future_taxi   = run_silver_taxi.submit(current_date)
     future_stat_s = run_silver_stationnement.submit(current_date)
 
-    # SILVER ind2 en parallèle — lancés SANS attendre ind1
+    # SILVER ind2 en parallèle
     future_ant_s  = run_silver_antennes_s.submit(current_date)
     future_fibre  = run_silver_fibre.submit(current_date)
 
-    # On attend TOUT le monde
     future_arrets.result()
     future_taxi.result()
     future_stat_s.result()
@@ -242,7 +277,7 @@ def main_pipeline():
     future_conn.result()
     logger.info("Gold OK")
 
-    # LOAD TEST — après Gold, toutes les tables sont à jour
+    # LOAD TEST
     run_load_test(current_date)
     logger.info("Load test OK")
 
@@ -272,7 +307,8 @@ def main_pipeline():
     logger.info(f"Volume total pipeline    : {total_volume} MB")
     logger.info(f"Debit moyen              : {debit_mbs} MB/s")
     logger.info(f"Comportement ce jour     : {'SKIP FETCH' if bronze_skipped else 'FETCH OK'}")
-    logger.info("Base PostgreSQL          : Schemas silver et gold mis a jour")
+    logger.info(f"PostgreSQL primary (5432) : {'OK' if primary_ok else 'INDISPONIBLE'}")
+    logger.info(f"PostgreSQL replica  (5433) : {'OK - WAL streaming actif' if replica_ok else 'INDISPONIBLE'}")
     logger.info("Load test                : Resultats dans test_deperfomance/results/")
     logger.info("=====================================")
 

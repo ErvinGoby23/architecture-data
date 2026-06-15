@@ -179,6 +179,7 @@ try:
     print(f'MongoDB : silver.indicateur_connectivite ({len(antennes_docs)} documents)')
 
     mongo['indicateur_connectivite'].create_index([("geo", GEOSPHERE)])
+    mongo['indicateur_connectivite'].create_index([("code_postal", 1)])
     print('MongoDB : Index 2dsphere cree sur le champ "geo"')
 except Exception as e:
     print(f'MongoDB indisponible — export geospatial ignore : {e}')

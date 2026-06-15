@@ -7,8 +7,11 @@ export async function fetchScoresConnectivite() {
   return res.json()
 }
 
-export async function fetchPointsConnectivite() {
-  const res = await fetch(`${API}/connectivite/points/geojson`, { headers })
+export async function fetchPointsConnectivite(codePostal = null) {
+  const url = codePostal
+    ? `${API}/connectivite/points/geojson?code_postal=${codePostal}`
+    : `${API}/connectivite/points/geojson`
+  const res = await fetch(url, { headers })
   if (!res.ok) throw new Error(`Erreur ${res.status}`)
   return res.json()
 }

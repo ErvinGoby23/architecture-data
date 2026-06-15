@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query, Depends, Request
 from sqlalchemy import text
 from typing import Optional
-from dependencies import verify_api_key, engine, mongo, limiter
+from dependencies import verify_api_key, get_engine, mongo, limiter
 
 router = APIRouter(prefix="/mobilite", tags=["Mobilité"])
 
@@ -15,13 +15,13 @@ MODE_MAP = {
 }
 
 @router.get("")
-@limiter.limit("2/minute")
+@limiter.limit("60/minute")
 def get_mobilite(
     request: Request,
     code_postal: Optional[int] = Query(None),
     _: str = Depends(verify_api_key),
 ):
-    with engine.connect() as conn:
+    with get_engine().connect() as conn:
         if code_postal:
             result = conn.execute(
                 text("SELECT * FROM gold.score_mobilite WHERE code_postal = :cp"),
@@ -38,7 +38,7 @@ def get_mobilite(
 
 
 @router.get("/points/geojson")
-@limiter.limit("1/minute")
+@limiter.limit("30/minute")
 def get_mobilite_points_geojson(
     request: Request,
     code_postal: Optional[int] = Query(None),

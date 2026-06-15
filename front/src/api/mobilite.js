@@ -7,8 +7,11 @@ export async function fetchScoresMobilite() {
   return res.json()
 }
 
-export async function fetchPointsMobilite() {
-  const res = await fetch(`${API}/mobilite/points/geojson`, { headers })
+export async function fetchPointsMobilite(codePostal = null) {
+  const url = codePostal
+    ? `${API}/mobilite/points/geojson?code_postal=${codePostal}`
+    : `${API}/mobilite/points/geojson`
+  const res = await fetch(url, { headers })
   if (!res.ok) throw new Error(`Erreur ${res.status}`)
   return res.json()
 }
