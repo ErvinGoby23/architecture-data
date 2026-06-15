@@ -215,13 +215,14 @@ export default function MapView({ scores, scoreKey, activeColor, activeIndicateu
     const targetArrNum = selected ? selected - 75000 : null
     const darkColor = activeIndicateur?.darkColor ?? '#0d1117'
     scores.forEach(s => {
+      const arrNum = s.code_postal - 75000  // ← calcul depuis code_postal
       const normalized = (s[scoreKey] ?? 0) / 100
       let baseColor = interpolateColor(darkColor, activeColor, normalized)
-      if (targetArrNum !== null && s.arrondissement !== targetArrNum) {
+      if (targetArrNum !== null && arrNum !== targetArrNum) {
         baseColor = interpolateColor('#1a2634', baseColor, 0.3)
       }
-      colorExpr.push(s.arrondissement, baseColor)
-      heightExpr.push(s.arrondissement, is3D ? Math.round(200 + normalized * 1200) : 0)
+      colorExpr.push(arrNum, baseColor)
+      heightExpr.push(arrNum, is3D ? Math.round(200 + normalized * 1200) : 0)
     })
     colorExpr.push(darkColor); heightExpr.push(0)
     map.current.setPaintProperty('arrondissements-3d', 'fill-extrusion-color', colorExpr)

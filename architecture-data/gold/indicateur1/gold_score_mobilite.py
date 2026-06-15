@@ -129,6 +129,21 @@ assert df_gold['score_mobilite'].between(0, 1).all(), "❌ Score hors [0,1]"
 assert len(df_gold) == 20,                            "❌ Nombre d'arrondissements incorrect"
 assert df_gold['rang'].nunique() == 20,               "❌ Les rangs ne sont pas uniques"
 
+cols_keep = [
+    'code_postal',
+    'nb_arrets', 'nb_lignes', 'nb_modes', 'modes_liste',
+    'nb_arrets_bus', 'nb_arrets_metro', 'nb_arrets_rer', 'nb_arrets_tram',
+    'nb_arrets_train', 'nb_arrets_train_regional', 'nb_arrets_funiculaire',
+    'nb_bornes', 'nb_emplacements_taxi',
+    'nb_places_2roues', 'nb_places_electrique', 'nb_places_gratuit',
+    'nb_places_payant', 'nb_places_pmr',
+    'score_arrets', 'score_lignes', 'score_modes', 'score_taxi',
+    'score_gratuit', 'score_2roues', 'score_pmr', 'score_electrique',
+    'score_mobilite', 'score_mobilite_100',
+    'rang', 'categorie'
+]
+df_gold = df_gold[cols_keep]
+
 # ==========================================================================
 # 7. EXPORT PARQUET
 # ==========================================================================
@@ -146,6 +161,11 @@ try:
         conn.execute(text("DROP TABLE IF EXISTS gold.score_mobilite CASCADE;"))
         conn.commit()
     df_gold.to_sql('score_mobilite', engine, if_exists='replace', index=False, schema='gold')
+    # Ajout PRIMARY KEY
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE gold.score_mobilite ADD PRIMARY KEY (code_postal)"))
+        conn.commit()
+    print(f'✓ PostgreSQL : table gold.score_mobilite écrasée avec le jour J ({len(df_gold)} lignes)')
     print(f'✓ PostgreSQL : table gold.score_mobilite écrasée avec le jour J ({len(df_gold)} lignes)')
 except Exception as e:
     print(f'❌ PostgreSQL indisponible — export ignoré : {e}')

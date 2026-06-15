@@ -26,15 +26,15 @@ QUERIES = {
     "select_all_mobilite":          "SELECT * FROM gold.score_mobilite ORDER BY rang",
     "select_all_connectivite":      "SELECT * FROM gold.score_connectivite ORDER BY rang",
     "filter_by_code_postal":        "SELECT * FROM gold.score_mobilite WHERE code_postal = 75001",
-    "top5_mobilite":                "SELECT arrondissement, score_mobilite_100, rang FROM gold.score_mobilite ORDER BY rang LIMIT 5",
-    "top5_connectivite":            "SELECT arrondissement, score_connectivite_100, rang FROM gold.score_connectivite ORDER BY rang LIMIT 5",
-    "select_all_silver_mobilite":   "SELECT * FROM silver.indicateur_mobilite ORDER BY arrondissement",
-    "select_all_silver_connectivite": "SELECT * FROM silver.indicateur_connectivite ORDER BY arrondissement",
+    "top5_mobilite":                "SELECT code_postal, score_mobilite_100, rang FROM gold.score_mobilite ORDER BY rang LIMIT 5",
+    "top5_connectivite":            "SELECT code_postal, score_connectivite_100, rang FROM gold.score_connectivite ORDER BY rang LIMIT 5",
+    "select_all_silver_mobilite":   "SELECT * FROM silver.indicateur_mobilite ORDER BY code_postal",
+    "select_all_silver_connectivite": "SELECT * FROM silver.indicateur_connectivite ORDER BY code_postal",
     "join_indicateurs": """
-        SELECT m.arrondissement, m.score_mobilite_100, c.score_connectivite_100
+        SELECT m.code_postal, m.score_mobilite_100, c.score_connectivite_100
         FROM gold.score_mobilite m
-        JOIN gold.score_connectivite c ON m.arrondissement = c.arrondissement
-        ORDER BY m.arrondissement
+        JOIN gold.score_connectivite c ON m.code_postal = c.code_postal
+        ORDER BY m.code_postal
     """,
 }
 

@@ -91,7 +91,7 @@ console.log('scores[0]:', scores[0])
         ) : (
           <div style={{ '--active-color': activeColor }}>
             <div className="detail-header">
-              <div className="detail-arrond">Paris {selectedData.arrondissement}e</div>
+              <div className="detail-arrond">Paris {selectedData.code_postal - 75000}e</div>
               <div className="detail-score-big">{selectedData[activeIndicateur.scoreKey] ?? '—'}</div>
               <div className="detail-score-label">/ 100</div>
               <div className="detail-badge">{selectedData.categorie || '—'}</div>

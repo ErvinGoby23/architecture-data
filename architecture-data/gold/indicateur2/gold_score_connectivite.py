@@ -127,7 +127,17 @@ assert df_gold['rang'].nunique() == 20,                   "Les rangs ne sont pas
 
 print(f"Shape gold : {df_gold.shape}")
 print(df_gold[['arrondissement', 'taux_fibre', 'score_mobile', 'score_connectivite_100', 'rang']].to_string(index=False))
-
+cols_keep = [
+    'code_postal',
+    'nb_antennes', 'nb_antennes_2g', 'nb_antennes_3g', 'nb_antennes_4g', 'nb_antennes_5g',
+    'nb_antennes_orange', 'nb_antennes_sfr', 'nb_antennes_free', 'nb_antennes_bouygues',
+    'operateur_leader',
+    'taux_fibre', 'taux_5g', 'taux_4g',
+    'score_fibre', 'score_mobile', 'score_densite',
+    'score_connectivite', 'score_connectivite_100',
+    'rang', 'categorie'
+]
+df_gold = df_gold[cols_keep]
 # ==========================================================================
 # 7. EXPORT PARQUET
 # ==========================================================================
@@ -145,6 +155,10 @@ try:
         conn.execute(text("DROP TABLE IF EXISTS gold.score_connectivite CASCADE;"))
         conn.commit()
     df_gold.to_sql('score_connectivite', engine, if_exists='replace', index=False, schema='gold')
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE gold.score_connectivite ADD PRIMARY KEY (code_postal)"))
+        conn.commit()
+    print(f'✓ PostgreSQL : gold.score_connectivite ({len(df_gold)} lignes)')
     print(f'✓ PostgreSQL : gold.score_connectivite ({len(df_gold)} lignes)')
 except Exception as e:
     print(f'PostgreSQL indisponible : {e}')
