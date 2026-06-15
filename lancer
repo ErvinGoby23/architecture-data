@@ -2,3 +2,21 @@ prefect server start
 uvicorn main:app --reload --port 8000   
 npm run dev
 python pipiline_orchestral
+
+docker compose down -v
+docker compose up -d
+docker compose logs postgres-replica
+
+exemple .env : 
+
+PG_URL=postgresql://postgres:test123@localhost:5432/postgres
+PG_URL_REPLICA=postgresql://postgres:test123@localhost:5433/postgres
+MONGO_URL=mongodb+srv://ervingoby_db_user:TgLKLBLOzetm0rLz@cluster0.kqe8fph.mongodb.net/
+MONGO_DB=urban_data
+# MONGO_URL=mongodb://localhost:27017/
+# MONGO_DB=urban_data
+API_KEY=ude-prod-2026
+
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=test123
+POSTGRES_DB=postgres

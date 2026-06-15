@@ -1,37 +1,52 @@
 services:
   postgres-primary:
-    image: postgres
+    image: postgres:16
     container_name: postgres-urban
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: test123
-      POSTGRES_DB: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256\nhost replication postgres all scram-sha-256"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     ports:
       - "5432:5432"
     volumes:
-      - pgdata-primary:/var/lib/postgresql
+      - pgdata-primary:/var/lib/postgresql/data
     command: >
       postgres
       -c wal_level=replica
       -c max_wal_senders=3
       -c wal_keep_size=64
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   postgres-replica:
-    image: postgres
+    image: postgres:16
     container_name: postgres-urban-replica
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: test123
-      POSTGRES_DB: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5433:5432"
     volumes:
-      - pgdata-replica:/var/lib/postgresql
+      - pgdata-replica:/var/lib/postgresql/data
     depends_on:
-      - postgres-primary
+      postgres-primary:
+        condition: service_healthy
+    entrypoint: >
+      bash -c "
+        if [ ! -f /var/lib/postgresql/data/PG_VERSION ]; then
+          echo 'Initialisation replica depuis le primary...'
+          pg_basebackup -h postgres-primary -U postgres -D /var/lib/postgresql/data -Fp -Xs -R -P
+          echo 'Replica initialise.'
+        fi
+        exec docker-entrypoint.sh postgres
+      "
 
 volumes:
   pgdata-primary:
-    external: true
-    name: 44ae397f4bd230cc1856a529551e8c575c2afcd0df0c484d5f6ecc7864e6e2ae
   pgdata-replica:
