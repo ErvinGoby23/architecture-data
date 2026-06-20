@@ -17,7 +17,7 @@ SILVER_DIR = os.path.join('nettoyage-indicateur2', date_str)
 
 os.makedirs(SILVER_DIR, exist_ok=True)
 
-# -- Chargement -----------------------------------------------------------
+# Chargement 
 df = pd.read_csv(
     BRONZE_FILE,
     sep=None,
@@ -28,11 +28,11 @@ df = pd.read_csv(
 df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
 print(f'[1/4] Chargement OK — shape brut : {df.shape}')
 print("Voici les colonnes du fichier :", df.columns.tolist())
-# -- Filtrage Paris -------------------------------------------------------
+#  Filtrage Paris 
 df = df[df['Code arrondissement'].between(75101, 75120)].copy()
 print(f'[2/4] Filtrage Paris — lignes retenues : {len(df)} (attendu : 20)')
 
-# -- Nettoyage vectorisé — lambda sur toutes les colonnes numériques ------
+#  Nettoyage vectorisé — lambda sur toutes les colonnes numériques
 cols_numeriques = (
     ['Logements', 'Établissements', 'Meilleure estimation des locaux T4 2025'] +
     [c for c in df.columns if c.startswith('T')]
@@ -55,7 +55,7 @@ for col in cols_numeriques:
 assert df.isnull().sum().sum() == 0, 'Valeurs manquantes détectées !'
 print('[3/4] Nettoyage OK — 0 valeur manquante')
 
-# -- Construction table silver --------------------------------------------
+#  Construction table silver -
 df_silver = df[['Code arrondissement', 'Nom arrondissement',
                 'Logements', 'Établissements',
                 'Meilleure estimation des locaux T4 2025',
@@ -71,7 +71,7 @@ df_silver['code_postal'] = df_silver['code_arrondissement'] - 75100 + 75000
 df_silver = df_silver.sort_values('code_arrondissement').reset_index(drop=True)
 print(f'[4/4] Table silver construite — shape : {df_silver.shape}')
 
-# -- Export Parquet -------------------------------------------------------
+#  Export Parquet 
 parquet_path = os.path.join(SILVER_DIR, 'fibre_paris_silver.parquet')
 df_silver.to_parquet(parquet_path, index=False)
 print(f'✓ Parquet créé : {parquet_path}')

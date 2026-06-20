@@ -13,9 +13,8 @@ from pymongo import MongoClient, GEOSPHERE
 
 load_dotenv('../../../.env')
 
-# ==========================================================================
 # GESTION DE LA DATE
-# ==========================================================================
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 SILVER_BASE = 'nettoyage-indicateur2'
 
@@ -42,9 +41,9 @@ PG_URL    = os.getenv('PG_URL')
 MONGO_URL = os.getenv('MONGO_URL')
 MONGO_DB  = 'silver'
 
-# ==========================================================================
+
 # 1. CHARGEMENT Parquet
-# ==========================================================================
+
 print("--- CHARGEMENT DES DONNÉES SILVER ---")
 df_fibre    = pd.read_parquet(f'{SILVER_BASE}/{date_str}/fibre_paris_silver.parquet')
 df_antennes = pd.read_parquet(f'{SILVER_BASE}/{date_str}/antennes_relais_paris_silver.parquet')
@@ -58,9 +57,9 @@ df_antennes = df_antennes[
 print(f"Fibre    : {df_fibre.shape}")
 print(f"Antennes : {df_antennes.shape}")
 
-# ==========================================================================
+
 # 2. AGRÉGATION ANTENNES — vectorisé
-# ==========================================================================
+
 agg_antennes = df_antennes.groupby('code_postal').agg(
     nb_antennes    = ('code_site', 'count'),
     nb_antennes_2g = ('has_2g',   'sum'),
@@ -114,10 +113,10 @@ agg_antennes = agg_antennes.merge(operateurs_pivot, on='code_postal', how='left'
 
 print(f"Colonnes agg_antennes : {list(agg_antennes.columns)}")
 
-# ==========================================================================
+
 # 3. FUSION FIBRE + ANTENNES — vectorisé
 # Silver : agrégation et structuration uniquement, pas de calculs métier
-# ==========================================================================
+
 df_fusion = df_fibre.merge(agg_antennes, on='code_postal', how='outer')
 df_fusion = df_fusion.sort_values('code_postal').reset_index(drop=True)
 df_fusion = df_fusion.fillna(0)
@@ -125,13 +124,16 @@ df_fusion = df_fusion.fillna(0)
 print(f"\nShape fusion : {df_fusion.shape}")
 print(f"Colonnes : {list(df_fusion.columns)}")
 
-# ==========================================================================
+
 # 4. EXPORTS PARQUET & POSTGRESQL
-# ==========================================================================
+
+
+# Parquet — garde toutes les colonnes
 parquet_path = os.path.join(SILVER_OUTPUT_DIR, 'indicateur_connectivite_silver.parquet')
 df_fusion.to_parquet(parquet_path, index=False)
 print(f'\nParquet final sauvegarde : {parquet_path}')
 
+# PostgreSQL — table Silver normalisée avec PRIMARY KEY
 try:
     engine = create_engine(PG_URL)
     with engine.connect() as conn:
@@ -139,14 +141,17 @@ try:
         conn.execute(text('DROP TABLE IF EXISTS silver.indicateur_connectivite CASCADE;'))
         conn.commit()
     df_fusion.to_sql('indicateur_connectivite', engine, if_exists='replace', index=False, schema='silver')
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE silver.indicateur_connectivite ADD PRIMARY KEY (code_postal)"))
+        conn.commit()
     print(f'PostgreSQL : silver.indicateur_connectivite ({len(df_fusion)} lignes)')
 except Exception as e:
     print(f'PostgreSQL indisponible — export ignore : {e}')
     print('   Le Parquet reste la source canonique.')
 
-# ==========================================================================
+
 # 5. MONGODB — insertion parallèle par chunks
-# ==========================================================================
+
 try:
     client = MongoClient(MONGO_URL)
     mongo  = client[MONGO_DB]
@@ -160,7 +165,7 @@ try:
                 {'type': 'Point', 'coordinates': [float(lon), float(lat)]}
                 for lon, lat in zip(x['longitude'], x['latitude'])
             ]
-        )[['code_postal', 'type', 'code_site', 'generation', 'operateur', 'geo']]
+        )[['code_postal', 'type', 'generation', 'operateur', 'geo']]
         .to_dict(orient='records')
     )
 

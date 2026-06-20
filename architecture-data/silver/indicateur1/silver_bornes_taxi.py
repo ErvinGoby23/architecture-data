@@ -6,7 +6,7 @@ import os
 import sys
 from datetime import datetime
 date_str = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime('%Y-%m-%d')
-# -- Lecture CSV brute -----------------------------------------------------
+# Lecture CSV brute 
 df = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/bornes-dappel-taxi.csv',
                  sep=None, engine='python')
 df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
@@ -14,7 +14,7 @@ print(f"Shape brute : {df.shape}")
 
 df_arr = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
 
-# -- Extraction coords vectorisée -----------------------------------------
+# Extraction coords vectorisée 
 geo_col   = next((c for c in df.columns if 'geopoint' in c.lower()), None)
 coords    = df[geo_col].str.split(',', expand=True)
 df['lat'] = pd.to_numeric(coords[0], errors='coerce')
@@ -36,14 +36,14 @@ df = df.drop_duplicates(subset=['id'])
 print(f"Doublons supprimés : {before - len(df)}")
 print(f"Shape après nettoyage : {df.shape}")
 
-# -- Géométrie vectorisée -------------------------------------------------
+# Géométrie vectorisée 
 gdf_bornes = gpd.GeoDataFrame(
     df,
     geometry=gpd.points_from_xy(df['lon'], df['lat']),
     crs="EPSG:4326"
 )
 
-# -- Arrondissements ------------------------------------------------------
+# Arrondissements
 def parse_geometry(geom_str):
     return shape(json.loads(geom_str)) if pd.notna(geom_str) else None
 

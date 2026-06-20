@@ -9,9 +9,9 @@ import glob
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 BRUTE_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '../../brute/indicateur-Score-accessibilité-mobilité'))
 
-# ==========================================================================
+
 # RECHERCHE DYNAMIQUE DE LA DERNIÈRE DATE DISPONIBLE (Evite les crashs)
-# ==========================================================================
+
 # On liste tous les sous-dossiers qui ont un format de date (AAAA-MM-JJ)
 dossiers_dates = [d for d in glob.glob(os.path.join(BRUTE_DIR, '*')) if os.path.isdir(d) and os.path.basename(d).replace('-', '').isdigit()]
 
@@ -27,7 +27,7 @@ path_stationnement = os.path.join(dernier_dossier, 'stationnement-voie-publique-
 print(f"📅 Dernière date de collecte trouvée : {date_str}")
 print(f"📖 Lecture du fichier : {path_stationnement}")
 
-# -- Lecture JSON brute dynamique -----------------------------------------
+#  Lecture JSON brute dynamique 
 with open(path_stationnement, encoding='utf-8') as f:
     data = json.load(f)
 
@@ -39,12 +39,12 @@ print(f"Shape brute : {df.shape}")
 path_arrondissements = os.path.join(BRUTE_DIR, 'arrondissements.csv')
 df_arr = pd.read_csv(path_arrondissements, sep=';')
 
-# -- Extraction coords vectorisée (list comprehension > apply) ------------
+#  Extraction coords vectorisée (list comprehension > apply) 
 geo = df['geo_point_2d'].tolist()
 df['latitude']  = pd.to_numeric([x.get('lat') if isinstance(x, dict) else None for x in geo], errors='coerce')
 df['longitude'] = pd.to_numeric([x.get('lon') if isinstance(x, dict) else None for x in geo], errors='coerce')
 
-# -- Suppression colonnes inutiles (EDA) ----------------------------------
+#  Suppression colonnes inutiles (EDA) 
 cols_drop = [
     'geo_point_2d', 'geo_shape',
     'prefet', 'numilot', 'numiris',
@@ -54,7 +54,7 @@ cols_drop = [
 ]
 df = df.drop(columns=[c for c in cols_drop if c in df.columns])
 
-# -- Renommage ------------------------------------------------------------
+#  Renommage
 df = df.rename(columns={
     'arrond'  : 'arrondissement_source',
     'typsta'  : 'type_stationnement',
@@ -71,7 +71,7 @@ df = df.rename(columns={
     'zoneres' : 'zone_residence',
 })
 
-# -- Nettoyage vectorisé --------------------------------------------------
+#  Nettoyage vectorisé 
 before = len(df)
 df = df.dropna(subset=['latitude', 'longitude'])
 print(f"Sans coords supprimés : {before - len(df)}")
@@ -85,14 +85,14 @@ df = df.drop_duplicates(subset=['id'])
 print(f"Doublons supprimés : {before - len(df)}")
 print(f"Shape après nettoyage : {df.shape}")
 
-# -- Géométrie vectorisée (points_from_xy = 10x plus rapide que apply) ----
+#  Géométrie vectorisée (points_from_xy = 10x plus rapide que apply)
 gdf_stat = gpd.GeoDataFrame(
     df,
     geometry=gpd.points_from_xy(df['longitude'], df['latitude']),
     crs="EPSG:4326"
 )
 
-# -- Arrondissements ------------------------------------------------------
+#  Arrondissements -
 def parse_geometry(geom_str):
     return shape(json.loads(geom_str)) if pd.notna(geom_str) else None
 
@@ -128,7 +128,7 @@ print(f"Code postaux uniques : {sorted(df_final['code_postal'].unique())}")
 cols_drop_final = ['arrondissement_insee', 'arrondissement', 'arrondissement_source']
 df_final = df_final.drop(columns=[c for c in cols_drop_final if c in df_final.columns])
 
-# -- Validation spatiale (URL Maps valide) ---------------------------------
+#  Validation spatiale (URL Maps valide) 
 print("\n=== VALIDATION SPATIALE (échantillon 5 points) ===")
 sample = df_final.groupby('code_postal').first().reset_index()[
     ['code_postal', 'latitude', 'longitude', 'nom_voie', 'numero_voie']
@@ -139,7 +139,7 @@ for _, r in sample.iterrows():
         f"  → http://maps.google.com/maps?q={r['latitude']},{r['longitude']}"
     )
 
-# -- Export Parquet sécurisé dans le répertoire du script ------------------
+#  Export Parquet sécurisé dans le répertoire du script
 output_dir = os.path.join('nettoyage-indicateur1', date_str)
 os.makedirs(output_dir, exist_ok=True)
 output = os.path.join(output_dir, 'stationnement_paris_silver.parquet')

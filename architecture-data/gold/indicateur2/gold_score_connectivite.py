@@ -38,9 +38,8 @@ PG_URL     = os.getenv('PG_URL')
 
 os.makedirs(GOLD_DIR, exist_ok=True)
 
-# ==========================================================================
 # 1. LECTURE SILVER
-# ==========================================================================
+
 silver_parquet_path = os.path.join(SILVER_DIR, 'indicateur_connectivite_silver.parquet')
 
 if not os.path.exists(silver_parquet_path):
@@ -49,9 +48,9 @@ if not os.path.exists(silver_parquet_path):
 df = pd.read_parquet(silver_parquet_path)
 print(f"Shape silver : {df.shape}")
 
-# ==========================================================================
+
 # 2. ENRICHISSEMENT PAR LA SURFACE
-# ==========================================================================
+
 csv_path    = os.path.join(BRUTE_DIR, 'arrondissements.csv')
 df_arr      = pd.read_csv(csv_path, sep=';')
 col_surface = next((c for c in df_arr.columns if 'surface' in c.lower()), None)
@@ -63,9 +62,9 @@ df_surface['surface_km2'] = (df_surface['surface_m2'] / 1_000_000).round(4)
 df['arrondissement'] = df['code_postal'].astype(int) - 75000
 df = df.merge(df_surface, on='arrondissement', how='left')
 
-# ==========================================================================
+
 # 3. CALCULS MÉTIER (Gold uniquement)
-# ==========================================================================
+ 
 df['taux_fibre'] = (df['locaux_fibres_T4_2025'] / df['locaux_total'] * 100).round(2)
 df['taux_5g']    = (df['nb_antennes_5g'] / df['nb_antennes'] * 100).round(2)
 df['taux_4g']    = (df['nb_antennes_4g'] / df['nb_antennes'] * 100).round(2)
@@ -78,9 +77,9 @@ df['taux_fibre'] = pd.to_numeric(df['taux_fibre'], errors='coerce')
 df['taux_5g']    = pd.to_numeric(df['taux_5g'],    errors='coerce')
 df['taux_4g']    = pd.to_numeric(df['taux_4g'],    errors='coerce')
 
-# ==========================================================================
+
 # 4. NORMALISATION MIN-MAX (0 → 1)
-# ==========================================================================
+
 def normalize(series):
     min_v, max_v = series.min(), series.max()
     if max_v == min_v:
@@ -96,9 +95,9 @@ df['score_mobile']  = normalize(
 )
 df['score_densite'] = normalize(df['nb_antennes_par_km2'])
 
-# ==========================================================================
+
 # 5. SCORE FINAL PONDÉRÉ ET RANG
-# ==========================================================================
+
 df['score_connectivite'] = (
     df['score_fibre']   * 0.45 +
     df['score_mobile']  * 0.40 +
@@ -117,9 +116,9 @@ df['categorie'] = pd.cut(
 
 df_gold = df.sort_values('rang').reset_index(drop=True)
 
-# ==========================================================================
+
 # 6. VALIDATION
-# ==========================================================================
+
 assert df_gold['score_connectivite'].isna().sum() == 0,   "NaN dans score_connectivite"
 assert df_gold['score_connectivite'].between(0, 1).all(), "Score hors [0,1]"
 assert len(df_gold) == 20,                                "Nombre d'arrondissements incorrect"
@@ -138,16 +137,16 @@ cols_keep = [
     'rang', 'categorie'
 ]
 df_gold = df_gold[cols_keep]
-# ==========================================================================
+
 # 7. EXPORT PARQUET
-# ==========================================================================
+
 parquet_path = os.path.join(GOLD_DIR, 'score_connectivite_gold.parquet')
 df_gold.to_parquet(parquet_path, index=False)
 print(f'✓ Parquet sauvegardé : {parquet_path}')
 
-# ==========================================================================
+
 # 8. EXPORT POSTGRESQL
-# ==========================================================================
+
 try:
     engine = create_engine(PG_URL)
     with engine.connect() as conn:

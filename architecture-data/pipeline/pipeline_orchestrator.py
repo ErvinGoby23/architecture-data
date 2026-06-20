@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import subprocess
+from pathlib import Path
 from datetime import datetime
 from prefect import flow, task, get_run_logger
 
@@ -15,6 +16,11 @@ ROOT_DIR = os.path.dirname(BASE_DIR)
 
 PG_URL         = os.getenv("PG_URL",         "postgresql://postgres:test123@localhost:5432/postgres")
 PG_URL_REPLICA = os.getenv("PG_URL_REPLICA", "postgresql://postgres:test123@localhost:5433/postgres")
+
+# 
+# VERROU ANTI-DOUBLON (evite les runs concurrents en cas de catchup Prefect)
+# 
+LOCK_DIR = os.path.join(ROOT_DIR, "pipeline", "locks")
 
 def run_script(path: str, arg: str = None) -> float:
     start = time.time()
@@ -51,9 +57,9 @@ def check_pg_replica(logger) -> bool:
         logger.warning("PostgreSQL replica  (5433) : indisponible")
         return False
 
-# ==========================================================================
+# 
 # BRONZE
-# ==========================================================================
+# 
 @task(name="Bronze - Fetch stationnement", retries=2, retry_delay_seconds=60)
 def run_bronze_stationnement(date_str: str):
     logger = get_run_logger()
@@ -87,9 +93,9 @@ def run_bronze_antennes(date_str: str):
         logger.info(f"Fetch OK en {duration}s — {size_mb} MB")
     return {"duration": duration, "size_mb": size_mb, "skipped": skipped}
 
-# ==========================================================================
+# 
 # SILVER & GOLD TASKS
-# ==========================================================================
+# 
 @task(name="Silver - Arrets lignes", retries=1)
 def run_silver_arrets(date_str: str):
     logger = get_run_logger()
@@ -202,9 +208,9 @@ def run_gold_connectivite(date_str: str):
         logger.warning("Fallback actif : Parquet Gold reste la source canonique")
         return None
 
-# ==========================================================================
+# 
 # LOAD TEST — C1.1 Tests de charge PostgreSQL (Silver + Gold)
-# ==========================================================================
+# 
 @task(name="Load Test - PostgreSQL Silver + Gold", retries=0)
 def run_load_test(date_str: str):
     logger = get_run_logger()
@@ -219,102 +225,134 @@ def run_load_test(date_str: str):
         logger.warning("Le pipeline continue — Parquet reste la source canonique")
         return None
 
-# ==========================================================================
+# 
 # FLOW PRINCIPAL
-# ==========================================================================
+# 
 @flow(name="Urban Data Explorer — Main Daily Batch")
 def main_pipeline():
     logger = get_run_logger()
-    global_start = time.time()
-
     current_date = datetime.now().strftime("%Y-%m-%d")
-    logger.info(f"=== DEMARRAGE DU BATCH POUR LA DATE : {current_date} ===")
 
-    primary_ok = check_pg_primary(logger)
-    replica_ok = check_pg_replica(logger)
+    # ----------------------------------------------------------------
+    # VERROU ANTI-DOUBLON
+    # Si Prefect a accumulé plusieurs runs en retard (catchup apres une
+    # coupure non propre du process .serve()), un seul run par date doit
+    # s'executer reellement. Les autres se coupent immediatement sans
+    # toucher aux fichiers Bronze, ce qui evite la race condition qui
+    # corrompt le JSON (ecritures concurrentes sur le meme fichier).
+    # ----------------------------------------------------------------
+    os.makedirs(LOCK_DIR, exist_ok=True)
+    lock_file = os.path.join(LOCK_DIR, f"{current_date}.lock")
 
-    if primary_ok and replica_ok:
-        logger.info("Architecture HA : primary (5432) + replica (5433) — WAL streaming actif")
-    elif primary_ok:
-        logger.warning("Architecture degradee : primary seul disponible — replica hors ligne")
-    else:
-        logger.warning("PostgreSQL indisponible — pipeline en mode Parquet uniquement")
+    # Creation atomique du verrou (O_EXCL) : meme si 2 runs demarrent a la
+    # milliseconde pres, l'OS garantit qu'un seul des deux reussit a creer
+    # le fichier. Pas de fenetre de race possible, contrairement a un
+    # simple "if exists: return" suivi d'un touch().
+    try:
+        fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.close(fd)
+    except FileExistsError:
+        logger.warning(f"Run deja effectue (ou en cours) pour {current_date} — annulation pour eviter le doublon")
+        return
 
-    # BRONZE en parallèle
-    future_stat = run_bronze_stationnement.submit(current_date)
-    future_ant  = run_bronze_antennes.submit(current_date)
-    perf_stat   = future_stat.result()
-    perf_ant    = future_ant.result()
-    logger.info("Bronze OK")
+    try:
+        global_start = time.time()
+        logger.info(f"=== DEMARRAGE DU BATCH POUR LA DATE : {current_date} ===")
 
-    # SILVER ind1 en parallèle
-    future_arrets = run_silver_arrets.submit(current_date)
-    future_taxi   = run_silver_taxi.submit(current_date)
-    future_stat_s = run_silver_stationnement.submit(current_date)
+        primary_ok = check_pg_primary(logger)
+        replica_ok = check_pg_replica(logger)
 
-    # SILVER ind2 en parallèle
-    future_ant_s  = run_silver_antennes_s.submit(current_date)
-    future_fibre  = run_silver_fibre.submit(current_date)
+        if primary_ok and replica_ok:
+            logger.info("Architecture HA : primary (5432) + replica (5433) — WAL streaming actif")
+        elif primary_ok:
+            logger.warning("Architecture degradee : primary seul disponible — replica hors ligne")
+        else:
+            logger.warning("PostgreSQL indisponible — pipeline en mode Parquet uniquement")
 
-    future_arrets.result()
-    future_taxi.result()
-    future_stat_s.result()
-    future_ant_s.result()
-    future_fibre.result()
-    logger.info("Silver OK")
+        # BRONZE en parallèle
+        future_stat = run_bronze_stationnement.submit(current_date)
+        future_ant  = run_bronze_antennes.submit(current_date)
+        perf_stat   = future_stat.result()
+        perf_ant    = future_ant.result()
+        logger.info("Bronze OK")
 
-    # FUSIONS en parallèle
-    future_fusion1 = run_silver_fusion_ind1.submit(current_date)
-    future_fusion2 = run_silver_fusion_ind2.submit(current_date)
-    future_fusion1.result()
-    future_fusion2.result()
-    logger.info("Fusions OK")
+        # SILVER ind1 en parallèle
+        future_arrets = run_silver_arrets.submit(current_date)
+        future_taxi   = run_silver_taxi.submit(current_date)
+        future_stat_s = run_silver_stationnement.submit(current_date)
 
-    # GOLD en parallèle
-    future_mob  = run_gold_mobilite.submit(current_date)
-    future_conn = run_gold_connectivite.submit(current_date)
-    future_mob.result()
-    future_conn.result()
-    logger.info("Gold OK")
+        # SILVER ind2 en parallèle
+        future_ant_s  = run_silver_antennes_s.submit(current_date)
+        future_fibre  = run_silver_fibre.submit(current_date)
 
-    # LOAD TEST
-    run_load_test(current_date)
-    logger.info("Load test OK")
+        future_arrets.result()
+        future_taxi.result()
+        future_stat_s.result()
+        future_ant_s.result()
+        future_fibre.result()
+        logger.info("Silver OK")
 
-    # RAPPORT DE PERFORMANCE (C2.4)
-    total_duration = round(time.time() - global_start, 1)
-    bronze_skipped = perf_stat.get("skipped", False) or perf_ant.get("skipped", False)
+        # FUSIONS en parallèle
+        future_fusion1 = run_silver_fusion_ind1.submit(current_date)
+        future_fusion2 = run_silver_fusion_ind2.submit(current_date)
+        future_fusion1.result()
+        future_fusion2.result()
+        logger.info("Fusions OK")
 
-    vol_bronze = round(perf_stat["size_mb"] + perf_ant["size_mb"], 2)
-    silver_files = [
-        os.path.join(ROOT_DIR, "silver", "indicateur1", "nettoyage-indicateur1", current_date, "indicateur_mobilite_silver.parquet"),
-        os.path.join(ROOT_DIR, "silver", "indicateur2", "nettoyage-indicateur2", current_date, "indicateur_connectivite_silver.parquet"),
-    ]
-    vol_silver = round(sum(file_size_mb(f) for f in silver_files), 2)
-    gold_files = [
-        os.path.join(ROOT_DIR, "gold", "indicateur1", current_date, "score_mobilite_gold.parquet"),
-        os.path.join(ROOT_DIR, "gold", "indicateur2", current_date, "score_connectivite_gold.parquet"),
-    ]
-    vol_gold = round(sum(file_size_mb(f) for f in gold_files), 2)
-    total_volume = round(vol_bronze + vol_silver + vol_gold, 2)
-    debit_mbs    = round(total_volume / total_duration, 2) if total_duration > 0 else 0
+        # GOLD en parallèle
+        future_mob  = run_gold_mobilite.submit(current_date)
+        future_conn = run_gold_connectivite.submit(current_date)
+        future_mob.result()
+        future_conn.result()
+        logger.info("Gold OK")
 
-    logger.info("=== RAPPORT DE PERFORMANCE (C2.4) ===")
-    logger.info(f"Temps total d'execution  : {total_duration}s")
-    logger.info(f"Volume Bronze  (APIs)    : {vol_bronze} MB")
-    logger.info(f"Volume Silver  (Parquet) : {vol_silver} MB")
-    logger.info(f"Volume Gold    (Parquet) : {vol_gold} MB")
-    logger.info(f"Volume total pipeline    : {total_volume} MB")
-    logger.info(f"Debit moyen              : {debit_mbs} MB/s")
-    logger.info(f"Comportement ce jour     : {'SKIP FETCH' if bronze_skipped else 'FETCH OK'}")
-    logger.info(f"PostgreSQL primary (5432) : {'OK' if primary_ok else 'INDISPONIBLE'}")
-    logger.info(f"PostgreSQL replica  (5433) : {'OK - WAL streaming actif' if replica_ok else 'INDISPONIBLE'}")
-    logger.info("Load test                : Resultats dans test_deperfomance/results/")
-    logger.info("=====================================")
+        # LOAD TEST
+        run_load_test(current_date)
+        logger.info("Load test OK")
+
+        # RAPPORT DE PERFORMANCE (C2.4)
+        total_duration = round(time.time() - global_start, 1)
+        bronze_skipped = perf_stat.get("skipped", False) or perf_ant.get("skipped", False)
+
+        vol_bronze = round(perf_stat["size_mb"] + perf_ant["size_mb"], 2)
+        silver_files = [
+            os.path.join(ROOT_DIR, "silver", "indicateur1", "nettoyage-indicateur1", current_date, "indicateur_mobilite_silver.parquet"),
+            os.path.join(ROOT_DIR, "silver", "indicateur2", "nettoyage-indicateur2", current_date, "indicateur_connectivite_silver.parquet"),
+        ]
+        vol_silver = round(sum(file_size_mb(f) for f in silver_files), 2)
+        gold_files = [
+            os.path.join(ROOT_DIR, "gold", "indicateur1", current_date, "score_mobilite_gold.parquet"),
+            os.path.join(ROOT_DIR, "gold", "indicateur2", current_date, "score_connectivite_gold.parquet"),
+        ]
+        vol_gold = round(sum(file_size_mb(f) for f in gold_files), 2)
+        total_volume = round(vol_bronze + vol_silver + vol_gold, 2)
+        debit_mbs    = round(total_volume / total_duration, 2) if total_duration > 0 else 0
+
+        logger.info("=== RAPPORT DE PERFORMANCE (C2.4) ===")
+        logger.info(f"Temps total d'execution  : {total_duration}s")
+        logger.info(f"Volume Bronze  (APIs)    : {vol_bronze} MB")
+        logger.info(f"Volume Silver  (Parquet) : {vol_silver} MB")
+        logger.info(f"Volume Gold    (Parquet) : {vol_gold} MB")
+        logger.info(f"Volume total pipeline    : {total_volume} MB")
+        logger.info(f"Debit moyen              : {debit_mbs} MB/s")
+        logger.info(f"Comportement ce jour     : {'SKIP FETCH' if bronze_skipped else 'FETCH OK'}")
+        logger.info(f"PostgreSQL primary (5432) : {'OK' if primary_ok else 'INDISPONIBLE'}")
+        logger.info(f"PostgreSQL replica  (5433) : {'OK - WAL streaming actif' if replica_ok else 'INDISPONIBLE'}")
+        logger.info("Load test                : Resultats dans test_deperfomance/results/")
+        logger.info("=====================================")
+
+    except Exception:
+        # Si le run plante en cours de route, on retire le verrou pour
+        # permettre un vrai retry plus tard (sinon le pipeline reste
+        # bloque jusqu'au lendemain meme apres une vraie erreur reseau).
+        if os.path.exists(lock_file):
+            os.remove(lock_file)
+        raise
 
 
 if __name__ == "__main__":
     main_pipeline.serve(
         name="daily-urban-explorer-sync",
-        cron="0 3 * * *"
+        cron="0 3 * * *",
+        pause_on_shutdown=True,  # pause le schedule si .serve() est arrete proprement (Ctrl+C)
     )

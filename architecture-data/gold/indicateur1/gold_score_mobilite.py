@@ -39,9 +39,8 @@ GOLD_DIR   = os.path.join(ROOT_DIR, 'gold', 'indicateur1', date_str)
 PG_URL = os.getenv('PG_URL')
 os.makedirs(GOLD_DIR, exist_ok=True)
 
-# ==========================================================================
+
 # 1. LECTURE SILVER
-# ==========================================================================
 silver_parquet_path = os.path.join(SILVER_DIR, 'indicateur_mobilite_silver.parquet')
 
 if not os.path.exists(silver_parquet_path):
@@ -50,9 +49,7 @@ if not os.path.exists(silver_parquet_path):
 df = pd.read_parquet(silver_parquet_path)
 print(f"Shape silver : {df.shape}")
 
-# ==========================================================================
 # 2. ENRICHISSEMENT PAR LA SURFACE
-# ==========================================================================
 csv_path    = os.path.join(BRUTE_DIR, 'arrondissements.csv')
 df_arr      = pd.read_csv(csv_path, sep=';')
 col_surface = next((c for c in df_arr.columns if 'surface' in c.lower()), None)
@@ -64,9 +61,8 @@ df_surface['surface_km2'] = (df_surface['surface_m2'] / 1_000_000).round(4)
 df['arrondissement'] = df['code_postal'].astype(int) - 75000
 df = df.merge(df_surface, on='arrondissement', how='left')
 
-# ==========================================================================
+
 # 3. INDICATEURS PAR KM²
-# ==========================================================================
 df['nb_arrets_par_km2']         = (df['nb_arrets']           / df['surface_km2']).round(2)
 df['nb_lignes_par_km2']         = (df['nb_lignes']            / df['surface_km2']).round(2)
 df['nb_bornes_par_km2']         = (df['nb_bornes']            / df['surface_km2']).round(2)
@@ -75,9 +71,8 @@ df['nb_places_2roues_par_km2']  = (df['nb_places_2roues']     / df['surface_km2'
 df['nb_places_pmr_par_km2']     = (df['nb_places_pmr']        / df['surface_km2']).round(2)
 df['nb_places_elec_par_km2']    = (df['nb_places_electrique'] / df['surface_km2']).round(2)
 
-# ==========================================================================
+
 # 4. NORMALISATION MIN-MAX (0 → 1)
-# ==========================================================================
 def normalize(series):
     min_v, max_v = series.min(), series.max()
     if max_v == min_v:
@@ -93,9 +88,8 @@ df['score_2roues']     = normalize(df['nb_places_2roues_par_km2'])
 df['score_pmr']        = normalize(df['nb_places_pmr_par_km2'])
 df['score_electrique'] = normalize(df['nb_places_elec_par_km2'])
 
-# ==========================================================================
+
 # 5. SCORE FINAL PONDÉRÉ ET RANG
-# ==========================================================================
 df['score_mobilite'] = (
     df['score_arrets']     * 0.25 +
     df['score_lignes']     * 0.20 +
@@ -121,9 +115,8 @@ df['categorie'] = pd.cut(
 df_gold = df.sort_values('rang').reset_index(drop=True)
 
 
-# ==========================================================================
+
 # 6. VALIDATION
-# ==========================================================================
 assert df_gold['score_mobilite'].isna().sum() == 0,   "❌ NaN dans score_mobilite"
 assert df_gold['score_mobilite'].between(0, 1).all(), "❌ Score hors [0,1]"
 assert len(df_gold) == 20,                            "❌ Nombre d'arrondissements incorrect"
@@ -144,16 +137,13 @@ cols_keep = [
 ]
 df_gold = df_gold[cols_keep]
 
-# ==========================================================================
+
 # 7. EXPORT PARQUET
-# ==========================================================================
 parquet_path = os.path.join(GOLD_DIR, 'score_mobilite_gold.parquet')
 df_gold.to_parquet(parquet_path, index=False)
 print(f'✓ Fichier Parquet daté sauvegardé : {parquet_path}')
 
-# ==========================================================================
 # 8. EXPORT POSTGRESQL
-# ==========================================================================
 try:
     engine = create_engine(PG_URL)
     with engine.connect() as conn:

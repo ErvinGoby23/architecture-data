@@ -30,6 +30,8 @@ limiter = Limiter(key_func=get_remote_address)
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
+# dependencies.py — remplace get_engine() et vire "engine = engine_primary"
+
 def get_engine():
     try:
         with engine_primary.connect() as conn:
@@ -38,9 +40,7 @@ def get_engine():
     except OperationalError:
         if engine_replica:
             return engine_replica
-        raise
-
-engine = engine_primary
+        raise HTTPException(status_code=503, detail="Base de données indisponible")
 
 def verify_api_key(key: str = Depends(api_key_header)):
     if key != API_KEY:

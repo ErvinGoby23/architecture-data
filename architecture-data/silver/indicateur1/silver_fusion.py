@@ -137,18 +137,25 @@ print(f"Colonnes : {list(df_fusion.columns)}")
 # ==========================================================================
 # 4. EXPORTS PARQUET & POSTGRESQL
 # ==========================================================================
+
+# Parquet — garde toutes les colonnes dont modes_liste
 parquet_path = os.path.join(SILVER_OUTPUT_DIR, 'indicateur_mobilite_silver.parquet')
 df_fusion.to_parquet(parquet_path, index=False)
 print(f'\n✓ Parquet final sauvegardé dans : {parquet_path}')
 
+# PostgreSQL — exclut modes_liste pour respecter la 1NF
 try:
     engine = create_engine(PG_URL)
+    df_fusion_pg = df_fusion.drop(columns=['modes_liste'], errors='ignore')
     with engine.connect() as conn:
         conn.execute(text("CREATE SCHEMA IF NOT EXISTS silver;"))
         conn.execute(text("DROP TABLE IF EXISTS silver.indicateur_mobilite CASCADE;"))
         conn.commit()
-    df_fusion.to_sql('indicateur_mobilite', engine, if_exists='replace', index=False, schema='silver')
-    print(f'✓ PostgreSQL : table silver.indicateur_mobilite ({len(df_fusion)} lignes)')
+    df_fusion_pg.to_sql('indicateur_mobilite', engine, if_exists='replace', index=False, schema='silver')
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE silver.indicateur_mobilite ADD PRIMARY KEY (code_postal)"))
+        conn.commit()
+    print(f'✓ PostgreSQL : table silver.indicateur_mobilite ({len(df_fusion_pg)} lignes)')
 except Exception as e:
     print(f'❌ PostgreSQL indisponible — export ignoré : {e}')
     print('   Le Parquet reste la source canonique.')
@@ -165,7 +172,7 @@ arrets_df_tmp['geo'] = [
     {'type': 'Point', 'coordinates': [float(lon), float(lat)]}
     for lon, lat in zip(arrets_df_tmp['stop_lon'], arrets_df_tmp['stop_lat'])
 ]
-cols_keep_arrets = [c for c in ['code_postal', 'type', 'stop_id', 'mode_nom', 'route_short_name', 'geo'] if c in arrets_df_tmp.columns]
+cols_keep_arrets = [c for c in ['code_postal', 'type', 'mode_nom', 'geo'] if c in arrets_df_tmp.columns]
 arrets_docs = arrets_df_tmp[cols_keep_arrets].to_dict(orient='records')
 
 # --- 5.2 Préparation : Taxis ---
@@ -177,7 +184,7 @@ taxi_df_tmp['geo'] = [
     {'type': 'Point', 'coordinates': [float(lon), float(lat)]}
     for lon, lat in zip(taxi_df_tmp['lon'], taxi_df_tmp['lat'])
 ]
-taxi_docs = taxi_df_tmp[['code_postal', 'type', 'borne_id', 'geo']].to_dict(orient='records')
+taxi_docs = taxi_df_tmp[['code_postal', 'type', 'geo']].to_dict(orient='records')
 
 # --- 5.3 Préparation : Stationnement ---
 df_stat_full = pd.read_parquet(f'{SILVER_BASE}/{date_str}/stationnement_paris_silver.parquet')
@@ -189,7 +196,7 @@ stat_df_tmp['geo'] = [
     {'type': 'Point', 'coordinates': [float(lon), float(lat)]}
     for lon, lat in zip(stat_df_tmp['longitude'], stat_df_tmp['latitude'])
 ]
-stat_docs = stat_df_tmp[['code_postal', 'type', 'id', 'nom_voie', 'regime_priorite', 'places_relevees', 'geo']].to_dict(orient='records')
+stat_docs = stat_df_tmp[['code_postal', 'type', 'geo']].to_dict(orient='records')
 
 # --- 5.4 Fonctions d'insertion optimisées (ordered=False = parallélisme côté Atlas) ---
 def insert_arrets():

@@ -40,24 +40,24 @@ df = pd.DataFrame(data['records'])
 df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
 print(f"Shape brute : {df.shape}")
 
-# -- Extraction coords vectorisée -----------------------------------------
+#  Extraction coords vectorisée 
 geo = df['geo_point_2d'].tolist()
 df['latitude']  = pd.to_numeric([x.get('lat') if isinstance(x, dict) else None for x in geo], errors='coerce')
 df['longitude'] = pd.to_numeric([x.get('lon') if isinstance(x, dict) else None for x in geo], errors='coerce')
 
-# -- Suppression colonnes inutiles ----------------------------------------
+# Suppression colonnes inutiles
 cols_drop = [
     'geo_point_2d', 'geo_shape', 'mise_en_serv_5g_700', 'se_anno_cad_data',
     'adresse', 'mise_en_serv', 'mise_en_serv_4g', 'mise_en_serv_5g_3500'
 ]
 df = df.drop(columns=[c for c in cols_drop if c in df.columns])
 
-# -- Nettoyage vectorisé --------------------------------------------------
+# Nettoyage vectorisé
 df['operateur'] = df['operateur'].str.upper().str.strip()
 df['type']      = df['type'].fillna('NON RENSEIGNÉ')
 
 
-# -- Génération dominante (hiérarchie 5G > 4G > 3G > 2G) -----------------
+#  Génération dominante (hiérarchie 5G > 4G > 3G > 2G)
 def generation(t):
     if pd.isna(t) or t == 'NON RENSEIGNÉ': return '2G'
     if '5G' in t: return '5G'
@@ -76,7 +76,7 @@ print(f"Antennes 4G : {df['has_4g'].sum()} ({df['has_4g'].mean()*100:.1f}%)")
 print(f"Antennes 3G : {df['has_3g'].sum()} ({df['has_3g'].mean()*100:.1f}%)")
 print(f"Antennes 2G : {df['has_2g'].sum()} ({df['has_2g'].mean()*100:.1f}%)")
 print(f"Total vérifié : {df[['has_5g','has_4g','has_3g','has_2g']].sum().sum()} == {len(df)}")
-# -- Filtrage coords ------------------------------------------------------
+# Filtrage coords
 before = len(df)
 df = df.dropna(subset=['latitude', 'longitude'])
 print(f"Sans coords supprimés : {before - len(df)}")
@@ -90,7 +90,7 @@ df = df.drop_duplicates(subset=['code_site'])
 print(f"Doublons supprimés : {before - len(df)}")
 print(f"Shape après nettoyage : {df.shape}")
 
-# -- Spatial join sur les vraies frontières des arrondissements -----------
+# Spatial join sur les vraies frontières des arrondissements
 df_arr    = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
 
 def parse_geometry(geom_str):
@@ -129,11 +129,11 @@ df_final['code_postal'] = df_final['code_postal'].astype(int)
 print(f"Antennes Paris retenues : {len(df_final):,}")
 print(f"Code postaux uniques : {sorted(df_final['code_postal'].unique())}")
 
-# -- Suppression colonnes inutiles finales --------------------------------
+# Suppression colonnes inutiles finales
 cols_drop_final = ['ardt']
 df_final = df_final.drop(columns=[c for c in cols_drop_final if c in df_final.columns])
 
-# -- Validation spatiale --------------------------------------------------
+# Validation spatiale 
 print("\n=== VALIDATION SPATIALE (échantillon 5 points) ===")
 sample = df_final.groupby('code_postal').first().reset_index()[
     ['code_postal', 'latitude', 'longitude', 'operateur']
@@ -144,7 +144,7 @@ for _, r in sample.iterrows():
         f"  → https://www.google.com/maps?q={r['latitude']},{r['longitude']}"
     )
 
-# -- Export Parquet -------------------------------------------------------
+# Export Parquet
 output_dir = os.path.join('nettoyage-indicateur2', date_str)
 os.makedirs(output_dir, exist_ok=True)
 output = os.path.join(output_dir, 'antennes_relais_paris_silver.parquet')

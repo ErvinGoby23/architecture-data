@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 date_str = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime('%Y-%m-%d')
 
-# -- Lecture CSV brute -----------------------------------------------------
+#Lecture CSV brute 
 df = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrets-lignes.csv',
                  sep=None, engine='python')
 df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
@@ -15,7 +15,7 @@ print(f"Shape brute : {df.shape}")
 
 df_arr = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
 
-# -- Renommage ------------------------------------------------------------
+#Renommage
 df = df.rename(columns={
     'shortname'      : 'route_short_name',
     'mode'           : 'route_type',
@@ -26,7 +26,7 @@ df = df.rename(columns={
 })
 df = df.drop(columns=[c for c in ['bookingrules', 'pointgeo'] if c in df.columns])
 
-# -- Coords vectorisées ---------------------------------------------------
+#Coords vectorisées 
 df['stop_lat'] = pd.to_numeric(df['stop_lat'], errors='coerce')
 df['stop_lon'] = pd.to_numeric(df['stop_lon'], errors='coerce')
 
@@ -41,7 +41,7 @@ print(f"Doublons supprimés : {before - len(df)}")
 df = df[df['stop_lat'].between(48.0, 49.4) & df['stop_lon'].between(1.4, 3.6)].copy()
 print(f"Shape après filtrage IDF : {df.shape}")
 
-# -- Mapping mode_nom (valeurs string du CSV) ------------------------------
+#Mapping mode_nom (valeurs string du CSV) 
 MODE_MAP = {
     'Tramway'      : 'Tram',
     'Metro'        : 'Métro',
@@ -56,14 +56,14 @@ MODE_MAP = {
 df['mode_nom'] = df['route_type'].map(MODE_MAP).fillna('Autre')
 print(f"Modes détectés : {df['mode_nom'].unique()}")
 
-# -- Géométrie vectorisée -------------------------------------------------
+# Géométrie vectorisée 
 gdf_arrets = gpd.GeoDataFrame(
     df,
     geometry=gpd.points_from_xy(df['stop_lon'], df['stop_lat']),
     crs="EPSG:4326"
 )
 
-# -- Arrondissements ------------------------------------------------------
+# Arrondissements
 def parse_geometry(geom_str):
     return shape(json.loads(geom_str)) if pd.notna(geom_str) else None
 

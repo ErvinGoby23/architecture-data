@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor  # <-- On ajoute ça pour le parallélisme
 
-# -- Config ----------------------------------------------------------------
+#Config
 BASE_URL   = "https://opendata.paris.fr/api/explore/v2.1/catalog/datasets"
 DATASET    = "antennes-relais"
 LIMIT      = 100
@@ -27,9 +27,7 @@ now_iso  = now.isoformat()
 dated_dir = os.path.join(OUTPUT_DIR, date_str)
 OUTPUT    = os.path.join(dated_dir, "antennes-relais.json")
 
-# ==========================================================================
 # GARDE-FOU : Vérification du double-fetch quotidien
-# ==========================================================================
 if os.path.exists(OUTPUT):
     size_mb = os.path.getsize(OUTPUT) / 1_000_000
     print(f"🛑 [SKIP] Le fetch du jour ({date_str}) a déjà été effectué.")
@@ -37,7 +35,7 @@ if os.path.exists(OUTPUT):
     print("   Arrêt du script pour préserver les quotas de l'API.")
     sys.exit(0)
 
-# -- Helpers ---------------------------------------------------------------
+# Helpers
 def count_total() -> int:
     r = requests.get(URL, params={"limit": 1, "offset": 0}, timeout=15)
     r.raise_for_status()
@@ -56,7 +54,7 @@ def fetch_page(offset: int) -> list:
         print(f"❌ Erreur sur l'offset {offset}: {e}")
         return []
 
-# -- Fetch complet PARALLÈLE -----------------------------------------------
+#Fetch complet PARALLÈLE 
 print(f"🚀 Lancement du Fetch MULTITHREADÉ antennes relais Paris : {date_str}...")
 print(f"URL : {URL}\n")
 
@@ -74,7 +72,6 @@ print(f"⚡ Envoi de {len(offsets)} requêtes en parallèle...")
 start_time = time.time()
 
 with ThreadPoolExecutor(max_workers=10) as executor:
-    # executor.map garantit que l'ordre des résultats correspond à l'ordre des offsets
     results = executor.map(fetch_page, offsets)
 
 # 3. On rassemble les résultats des différents threads
@@ -86,9 +83,9 @@ end_time = time.time()
 print(f"⏱️ Fetch terminé en {end_time - start_time:.2f} secondes.")
 print(f"Total collecté : {len(all_records)} antennes")
 
-# ==========================================================================
+# 
 # LE RESTE DU CODE (Statistiques, Sauvegarde JSON, Métadonnées) RESTE INCHANGÉ
-# ==========================================================================
+# 
 operateurs   = {}
 types_reseau = {}
 for r in all_records:

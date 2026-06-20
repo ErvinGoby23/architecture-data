@@ -14,7 +14,7 @@ import sys
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-# -- Config ----------------------------------------------------------------
+# Config -
 BASE_URL       = "https://opendata.paris.fr/api/explore/v2.1/catalog/datasets"
 DATASET        = "stationnement-voie-publique-emplacements"
 LIMIT          = 100  
@@ -28,14 +28,12 @@ now_iso  = now.isoformat()
 dated_dir = os.path.join(OUTPUT_DIR, date_str)
 OUTPUT    = os.path.join(dated_dir, "stationnement-voie-publique-emplacements.json")
 
-# ==========================================================================
 # GARDE-FOU
-# ==========================================================================
 if os.path.exists(OUTPUT):
     print(f"🛑 [SKIP] Le fetch du jour ({date_str}) pour le Stationnement a déjà été effectué.")
     sys.exit(0)
 
-# -- Helpers ---------------------------------------------------------------
+# Helpers 
 def count_records_arrond(arrond: int) -> int:
     """Compte le nombre de lignes pour un arrondissement spécifique"""
     params = {"limit": 1, "offset": 0, "where": f"arrond={arrond}"}
@@ -59,7 +57,7 @@ def fetch_page_arrond(args) -> list:
         print(f"❌ Erreur [Arrond {arrond:02d} | Offset {offset}]: {e}")
         return []
 
-# -- Execution Globale Parallèle -------------------------------------------
+# Execution Globale Parallèle 
 print(f"🚀 Lancement du Fetch stationnement Paris (Hybrid Multi-threaded) : {date_str}...")
 
 os.makedirs(dated_dir, exist_ok=True)
@@ -91,9 +89,7 @@ end_time = time.time()
 print(f"\n⏱️ Fetch stationnement terminé proprement en {end_time - start_time:.2f} secondes.")
 print(f"Total brut collecté : {len(all_records):,} enregistrements")
 
-# ==========================================================================
 # SAUVEGARDE ET METADONNEES
-# ==========================================================================
 output_data = {
     "source"        : URL,
     "dataset"       : DATASET,
