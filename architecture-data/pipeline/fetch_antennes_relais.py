@@ -28,6 +28,7 @@ dated_dir = os.path.join(OUTPUT_DIR, date_str)
 OUTPUT    = os.path.join(dated_dir, "antennes-relais.json")
 
 # GARDE-FOU : Vérification du double-fetch quotidien
+# Si le fichier du jour existe déjà, on arrête le script pour préserver le quota API
 if os.path.exists(OUTPUT):
     size_mb = os.path.getsize(OUTPUT) / 1_000_000
     print(f"🛑 [SKIP] Le fetch du jour ({date_str}) a déjà été effectué.")
@@ -36,6 +37,7 @@ if os.path.exists(OUTPUT):
     sys.exit(0)
 
 # Helpers
+# Interroge l'API pour connaître le nombre total d'antennes disponibles
 def count_total() -> int:
     r = requests.get(URL, params={"limit": 1, "offset": 0}, timeout=15)
     r.raise_for_status()
@@ -43,6 +45,7 @@ def count_total() -> int:
     print(f"Total annoncé par l'API : {total}")
     return total
 
+# Récupère une page de résultats à un offset donné (appelée en parallèle)
 def fetch_page(offset: int) -> list:
     """Fonction inchangée, mais qui sera appelée en parallèle"""
     params = {"limit": LIMIT, "offset": offset}
@@ -71,6 +74,7 @@ all_records = []
 print(f"⚡ Envoi de {len(offsets)} requêtes en parallèle...")
 start_time = time.time()
 
+# Exécute toutes les requêtes de pagination en parallèle (10 threads simultanés)
 with ThreadPoolExecutor(max_workers=10) as executor:
     results = executor.map(fetch_page, offsets)
 
@@ -86,6 +90,7 @@ print(f"Total collecté : {len(all_records)} antennes")
 # 
 # LE RESTE DU CODE (Statistiques, Sauvegarde JSON, Métadonnées) RESTE INCHANGÉ
 # 
+# Statistiques descriptives sur les opérateurs et types de réseau collectés
 operateurs   = {}
 types_reseau = {}
 for r in all_records:
@@ -102,6 +107,7 @@ print("\nTypes de réseau :")
 for t, count in sorted(types_reseau.items(), key=lambda x: -x[1]):
     print(f"  {str(t):<20} : {count}")
 
+# Sauvegarde du snapshot brut daté en JSON
 output_data = {
     "source"        : URL,
     "dataset"       : DATASET,
@@ -117,6 +123,7 @@ print(f"\n💾 Snapshot historique unique créé : {OUTPUT}")
 
 file_size = os.path.getsize(OUTPUT)
 
+# Métadonnées de traçabilité du fetch (statut, taille, total collecté)
 metadata = {
     "dataset": DATASET,
     "source": URL,

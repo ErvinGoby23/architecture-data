@@ -11,13 +11,39 @@ export default function Sidebar({
   onToggleType,
   year,
   onYearChange,
+  granularite = 'arrondissement',
+  onGranulariteChange,
 }) {
-  const activeColor  = activeIndicateur?.color || '#4f8ef7'
-  const selectedData = (selected && Array.isArray(scores)) ? scores.find(s => s.code_postal === selected) : null
-  const scoreBars    = (selectedData && activeIndicateur?.scoreBars) ? activeIndicateur.scoreBars(selectedData) : []
-  const stats        = (selectedData && activeIndicateur?.stats) ? activeIndicateur.stats(selectedData) : []
-  console.log('selected:', selected, typeof selected)
-console.log('scores[0]:', scores[0])
+  const activeColor = activeIndicateur?.color || '#4f8ef7'
+
+  const selectedData = (selected !== null && Array.isArray(scores))
+    ? (() => {
+        const matches = scores.filter(s => {
+          if (s.code_quartier !== undefined)
+            return parseInt(s.code_quartier) === parseInt(selected)
+          if (s.arrondissement !== undefined)
+            return parseInt(s.arrondissement) === parseInt(selected)
+          if (s.code_postal !== undefined)
+            return parseInt(s.code_postal) === 75000 + parseInt(selected)
+          return false
+        })
+        if (!matches.length) return null
+        if (year) return matches.find(s => s.annee === year) ?? null
+        if (matches[0]?.annee === undefined) return matches[0] ?? null
+        return matches.reduce((a, b) => a.annee > b.annee ? a : b)
+      })()
+    : null
+
+  const scoreBars  = (selectedData && activeIndicateur?.scoreBars) ? activeIndicateur.scoreBars(selectedData) : []
+  const isQuartier = granularite === 'quartier'
+  const totalZones = isQuartier ? 80 : 20
+
+  // Label zone sélectionnée
+  const zoneLabel = selectedData
+    ? selectedData.nom_quartier
+      ? `${selectedData.nom_quartier}`
+      : `Paris ${selectedData.arrondissement ?? (selectedData.code_postal - 75000)}e`
+    : null
 
   if (!activeIndicateur) {
     return <aside className="sidebar"><p className="detail-empty">Chargement...</p></aside>
@@ -39,12 +65,33 @@ console.log('scores[0]:', scores[0])
         ))}
       </div>
 
-      {/* 2. ANNÉE */}
+      {/* 2. GRANULARITÉ — uniquement pour mobilité */}
+      {onGranulariteChange && (
+        <div className="sidebar-section">
+          <p className="sidebar-section-title">Granularité</p>
+          <div className="year-filter">
+            <button
+              className={`preset-btn ${!isQuartier ? 'active' : ''}`}
+              onClick={() => onGranulariteChange('arrondissement')}
+            >
+              20 arr.
+            </button>
+            <button
+              className={`preset-btn ${isQuartier ? 'active' : ''}`}
+              onClick={() => onGranulariteChange('quartier')}
+            >
+              80 qtrs
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 3. ANNÉE */}
       {activeIndicateur.hasYearFilter && (
         <YearFilter year={year} onChange={onYearChange} />
       )}
 
-      {/* 3. COUCHES */}
+      {/* 4. COUCHES */}
       {activeIndicateur.pointTypes?.length > 0 && (
         <div className="sidebar-section">
           <p className="sidebar-section-title">Couches</p>
@@ -66,7 +113,7 @@ console.log('scores[0]:', scores[0])
         </div>
       )}
 
-      {/* 4. LÉGENDE */}
+      {/* 5. LÉGENDE */}
       <div className="sidebar-section">
         <p className="sidebar-section-title">Légende</p>
         <div className="legend">
@@ -83,19 +130,25 @@ console.log('scores[0]:', scores[0])
         </div>
       </div>
 
-      {/* 5. DÉTAIL ARRONDISSEMENT */}
+      {/* 6. DÉTAIL ZONE */}
       <div className="sidebar-section" style={{ flex: 1 }}>
-        <p className="sidebar-section-title">Détail arrondissement</p>
+        <p className="sidebar-section-title">
+          Détail {isQuartier ? 'quartier' : 'arrondissement'}
+        </p>
         {!selectedData ? (
-          <p className="detail-empty">Cliquez sur<br />un arrondissement</p>
+          <p className="detail-empty">
+            Cliquez sur<br />{isQuartier ? 'un quartier' : 'un arrondissement'}
+          </p>
         ) : (
           <div style={{ '--active-color': activeColor }}>
             <div className="detail-header">
-              <div className="detail-arrond">Paris {selectedData.code_postal - 75000}e</div>
+              <div className="detail-arrond">{zoneLabel}</div>
               <div className="detail-score-big">{selectedData[activeIndicateur.scoreKey] ?? '—'}</div>
               <div className="detail-score-label">/ 100</div>
               <div className="detail-badge">{selectedData.categorie || '—'}</div>
-              {selectedData.rang && <div className="detail-rang">Rang #{selectedData.rang} / 20</div>}
+              {selectedData.rang && (
+                <div className="detail-rang">Rang #{selectedData.rang} / {totalZones}</div>
+              )}
             </div>
 
             <div className="score-bars">

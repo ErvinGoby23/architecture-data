@@ -13,11 +13,10 @@ from pymongo import MongoClient, GEOSPHERE
 
 load_dotenv('../../../.env')
 
-# GESTION DE LA DATE
-
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 SILVER_BASE = 'nettoyage-indicateur2'
 
+# Détecte automatiquement le dernier dossier daté disponible
 def get_latest_date(silver_dir):
     dates = sorted([
         d for d in os.listdir(silver_dir)
@@ -58,7 +57,7 @@ print(f"Fibre    : {df_fibre.shape}")
 print(f"Antennes : {df_antennes.shape}")
 
 
-# 2. AGRÉGATION ANTENNES — vectorisé
+# 2. AGRÉGATION ANTENNES — pas d'année (snapshot ANFR sans dimension temporelle)
 
 agg_antennes = df_antennes.groupby('code_postal').agg(
     nb_antennes    = ('code_site', 'count'),
@@ -68,7 +67,7 @@ agg_antennes = df_antennes.groupby('code_postal').agg(
     nb_antennes_5g = ('has_5g',   'sum'),
 ).reset_index()
 
-# -- Opérateur leader (pondéré par génération) ----------------------------
+# Opérateur leader (pondéré par génération)
 POIDS_GENERATION = {'5G': 4, '4G': 3, '3G': 2, '2G': 1}
 df_antennes['poids'] = df_antennes['generation'].map(POIDS_GENERATION).fillna(1)
 
@@ -85,7 +84,6 @@ operateur_leader = (
 
 agg_antennes = agg_antennes.merge(operateur_leader, on='code_postal', how='left')
 
-# -- Répartition par opérateur --------------------------------------------
 OPERATEURS = {
     'ORANGE':           'nb_antennes_orange',
     'SFR':              'nb_antennes_sfr',
@@ -114,26 +112,26 @@ agg_antennes = agg_antennes.merge(operateurs_pivot, on='code_postal', how='left'
 print(f"Colonnes agg_antennes : {list(agg_antennes.columns)}")
 
 
-# 3. FUSION FIBRE + ANTENNES — vectorisé
-# Silver : agrégation et structuration uniquement, pas de calculs métier
+# 3. FUSION FIBRE + ANTENNES
+# Fibre a une ligne par (code_postal, annee) — antennes sont un snapshot sans année
+# On joint les antennes sur code_postal uniquement : elles se répètent pour chaque année fibre
 
-df_fusion = df_fibre.merge(agg_antennes, on='code_postal', how='outer')
-df_fusion = df_fusion.sort_values('code_postal').reset_index(drop=True)
+df_fusion = df_fibre.merge(agg_antennes, on='code_postal', how='left')
+df_fusion = df_fusion.sort_values(['code_postal', 'annee']).reset_index(drop=True)
 df_fusion = df_fusion.fillna(0)
 
 print(f"\nShape fusion : {df_fusion.shape}")
+print(f"Années disponibles : {sorted(df_fusion['annee'].unique())}")
 print(f"Colonnes : {list(df_fusion.columns)}")
 
 
 # 4. EXPORTS PARQUET & POSTGRESQL
 
-
-# Parquet — garde toutes les colonnes
 parquet_path = os.path.join(SILVER_OUTPUT_DIR, 'indicateur_connectivite_silver.parquet')
 df_fusion.to_parquet(parquet_path, index=False)
 print(f'\nParquet final sauvegarde : {parquet_path}')
 
-# PostgreSQL — table Silver normalisée avec PRIMARY KEY
+# PostgreSQL — PK devient (code_postal, annee)
 try:
     engine = create_engine(PG_URL)
     with engine.connect() as conn:
@@ -142,15 +140,15 @@ try:
         conn.commit()
     df_fusion.to_sql('indicateur_connectivite', engine, if_exists='replace', index=False, schema='silver')
     with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE silver.indicateur_connectivite ADD PRIMARY KEY (code_postal)"))
+        conn.execute(text("ALTER TABLE silver.indicateur_connectivite ADD PRIMARY KEY (code_postal, annee)"))
         conn.commit()
-    print(f'PostgreSQL : silver.indicateur_connectivite ({len(df_fusion)} lignes)')
+    print(f'PostgreSQL : silver.indicateur_connectivite ({len(df_fusion)} lignes, PK: code_postal+annee)')
 except Exception as e:
     print(f'PostgreSQL indisponible — export ignore : {e}')
     print('   Le Parquet reste la source canonique.')
 
 
-# 5. MONGODB — insertion parallèle par chunks
+# 5. MONGODB — inchangé (antennes = points géo, pas de dimension temporelle)
 
 try:
     client = MongoClient(MONGO_URL)
@@ -181,7 +179,6 @@ try:
                 f.result()
 
     print(f'MongoDB : silver.indicateur_connectivite ({len(antennes_docs)} documents)')
-
     mongo['indicateur_connectivite'].create_index([("geo", GEOSPHERE)])
     mongo['indicateur_connectivite'].create_index([("code_postal", 1)])
     print('MongoDB : Index 2dsphere cree sur le champ "geo"')

@@ -12,23 +12,32 @@ const SCORES_FETCHERS = {
 
 export default function App() {
   const [activeIndicateur, setActiveIndicateur] = useState(INDICATEURS[0])
-  const [selected, setSelected] = useState(null)
-  const [is3D, setIs3D]         = useState(true)
+  const [selected, setSelected]   = useState(null)
+  const [is3D, setIs3D]           = useState(true)
+  const [granularite, setGranularite] = useState('arrondissement') // 'arrondissement' | 'quartier'
   const [visibleTypes, setVisibleTypes] = useState(
     INDICATEURS[0].pointTypes?.map(p => p.id) ?? []
   )
-  const [year, setYear] = useState(null)
-  const [scores, setScores]   = useState([])
-  const [loading, setLoading] = useState(true)
+  const [year, setYear]           = useState(null)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [scores, setScores]       = useState([])
+  const [loading, setLoading]     = useState(true)
 
   useEffect(() => {
     const fetcher = SCORES_FETCHERS[activeIndicateur.id]
     if (!fetcher) return
     setLoading(true)
-    fetcher()
+
+    // Pour mobilité → passe la granularité
+    // Pour connectivité → passe juste l'année (ancienne signature)
+    const params = activeIndicateur.id === 'mobilite'
+      ? { granularite }
+      : (activeIndicateur.hasYearFilter ? year : undefined)
+
+    fetcher(params)
       .then(data => { setScores(data); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [activeIndicateur.id, year])
+  }, [activeIndicateur.id, year, refreshKey, granularite])
 
   useEffect(() => {
     setVisibleTypes(activeIndicateur.pointTypes?.map(p => p.id) ?? [])
@@ -40,6 +49,16 @@ export default function App() {
         ? prev.filter(t => t !== typeId)
         : [...prev, typeId]
     )
+  }
+
+  const handleYearChange = (y) => {
+    setYear(y)
+    setRefreshKey(k => k + 1)
+  }
+
+  const handleGranulariteChange = (g) => {
+    setGranularite(g)
+    setSelected(null) // reset sélection au changement de granularité
   }
 
   return (
@@ -59,13 +78,15 @@ export default function App() {
       <Sidebar
         indicateurs={INDICATEURS}
         activeIndicateur={activeIndicateur}
-        onSelectIndicateur={(ind) => { setActiveIndicateur(ind); setSelected(null) }}
+        onSelectIndicateur={(ind) => { setActiveIndicateur(ind); setSelected(null); setYear(null); if (!ind.hasQuartier) setGranularite('arrondissement') }}
         selected={selected}
         scores={scores}
         visibleTypes={visibleTypes}
         onToggleType={handleToggleType}
         year={year}
-        onYearChange={setYear}
+        onYearChange={handleYearChange}
+        granularite={granularite}
+        onGranulariteChange={activeIndicateur.id === 'mobilite' ? handleGranulariteChange : null}
       />
 
       <MapView
@@ -78,6 +99,7 @@ export default function App() {
         onSelect={setSelected}
         is3D={is3D}
         loading={loading}
+        granularite={granularite}
       />
     </div>
   )
