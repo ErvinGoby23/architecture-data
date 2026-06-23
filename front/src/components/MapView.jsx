@@ -23,7 +23,7 @@ const MODES = [
 
 function buildPopupHTML(label, data, indicateurId) {
   if (!data) return `<div class="popup-cp">${label}</div>`
-  const score = data.score_mobilite_100 ?? data.score_connectivite_100 ?? '—'
+  const score = data.score_mobilite_100 ?? data.score_connectivite_100 ?? data.score_services_100 ?? '—'
   const header = `
     <div class="popup-cp">${label}</div>
     <div class="popup-score">${score}<span>/100</span></div>
@@ -72,21 +72,27 @@ function buildPopupHTML(label, data, indicateurId) {
     `
   }
   if (indicateurId === 'services') {
-    return header + `
+    const estQuartier = data.code_quartier != null
+    let html = header + `
       <div class="popup-section-title">Infrastructures</div>
       <div class="popup-grid">
         <div class="popup-stat"><span class="popup-stat-val">${data.nb_ecoles ?? 0}</span><span class="popup-stat-lbl">Écoles</span></div>
         <div class="popup-stat"><span class="popup-stat-val">${data.nb_commissariats ?? 0}</span><span class="popup-stat-lbl">Commissariats</span></div>
       </div>
-      <div class="popup-divider"></div>
-      <div class="popup-section-title">Commerces locaux</div>
-      <div class="popup-grid">
-        <div class="popup-stat"><span class="popup-stat-val">${data.nb_commerces_total ?? 0}</span><span class="popup-stat-lbl">Total</span></div>
-        <div class="popup-stat"><span class="popup-stat-val">${data.boulangerie ?? 0}</span><span class="popup-stat-lbl">Boulangeries</span></div>
-        <div class="popup-stat"><span class="popup-stat-val">${data.supermarche ?? 0}</span><span class="popup-stat-lbl">Supermarchés</span></div>
-        <div class="popup-stat"><span class="popup-stat-val">${data.epicerie ?? 0}</span><span class="popup-stat-lbl">Épiceries</span></div>
-      </div>
     `
+    if (!estQuartier) {
+      html += `
+        <div class="popup-divider"></div>
+        <div class="popup-section-title">Commerces locaux</div>
+        <div class="popup-grid">
+          <div class="popup-stat"><span class="popup-stat-val">${data.nb_commerces_total ?? 0}</span><span class="popup-stat-lbl">Total</span></div>
+          <div class="popup-stat"><span class="popup-stat-val">${data.boulangerie ?? 0}</span><span class="popup-stat-lbl">Boulangeries</span></div>
+          <div class="popup-stat"><span class="popup-stat-val">${data.supermarche ?? 0}</span><span class="popup-stat-lbl">Supermarchés</span></div>
+          <div class="popup-stat"><span class="popup-stat-val">${data.epicerie ?? 0}</span><span class="popup-stat-lbl">Épiceries</span></div>
+        </div>
+      `
+    }
+    return html
   }
 
   return header
@@ -109,7 +115,7 @@ export default function MapView({
   const markersByTypeId = useRef({})
   const allPointsCache  = useRef({})
   const [mapReady, setMapReady]     = useState(false)
-  const [zonesLoaded, setZonesLoaded] = useState(0) // incrémenté après chaque chargement GeoJSON
+  const [zonesLoaded, setZonesLoaded] = useState(0)
 
   const visibleTypesRef     = useRef(visibleTypes)
   useEffect(() => { visibleTypesRef.current = visibleTypes }, [visibleTypes])
@@ -231,13 +237,11 @@ export default function MapView({
           onSelect(e.features[0].properties._id_zone)
         })
 
-        // Déclenche le recalcul des couleurs maintenant que le layer existe
         setZonesLoaded(n => n + 1)
       })
       .catch(console.error)
   }
 
-  // Init carte
   useEffect(() => {
     if (map.current) return
     popup.current = new maplibregl.Popup({
@@ -261,7 +265,6 @@ export default function MapView({
     return () => { map.current?.remove(); map.current = null }
   }, [])
 
-  // Charge zones quand granularite change ou carte prête
   useEffect(() => {
     if (!mapReady || !map.current) return
     if (map.current.isStyleLoaded()) {
@@ -271,71 +274,61 @@ export default function MapView({
     }
   }, [mapReady, granularite])
 
-  // Sync scores → window + ref
   useEffect(() => {
     window.__ude_scores       = scores
     window.__ude_scoreKey     = scoreKey
     window.__ude_indicateurId = activeIndicateur?.id
   }, [scores, scoreKey, activeIndicateur?.id])
 
-  // Couleurs + hauteurs 3D — zonesLoaded garantit que le layer existe
-// Remplacez le useEffect de calcul des couleurs/hauteurs par celui-ci :
-useEffect(() => {
-  if (!mapReady || !map.current || !scores.length || !scoreKey) return
-  if (!map.current.getLayer('zone-3d')) return
+  useEffect(() => {
+    if (!mapReady || !map.current || !scores.length || !scoreKey) return
+    if (!map.current.getLayer('zone-3d')) return
 
-  const isQuartier = granularite === 'quartier'
-  const colorExpr  = ['match', ['get', '_id_zone']]
-  const heightExpr = ['match', ['get', '_id_zone']]
-  const darkColor  = activeIndicateur?.darkColor ?? '#0d1117'
-  const targetId   = selected !== null ? parseInt(selected) : null
+    const isQuartier = granularite === 'quartier'
+    const colorExpr  = ['match', ['get', '_id_zone']]
+    const heightExpr = ['match', ['get', '_id_zone']]
+    const darkColor  = activeIndicateur?.darkColor ?? '#0d1117'
+    const targetId   = selected !== null ? parseInt(selected) : null
 
-  // Utilisation d'un Set pour garantir des ID strictement uniques pour le match MapLibre
-  const idsTraites = new Set()
-  let aAjouteDesBranches = false
+    const idsTraites = new Set()
+    let aAjouteDesBranches = false
 
-  scores.forEach(s => {
-    const id = isQuartier ? parseInt(s.code_quartier) : getArrNum(s)
-    
-    // Sécurité : Si l'ID est invalide ou a déjà été ajouté, on passe
-    if (id === null || isNaN(id) || idsTraites.has(id)) return
-    
-    idsTraites.add(id)
-    aAjouteDesBranches = true
+    scores.forEach(s => {
+      const id = isQuartier ? parseInt(s.code_quartier) : getArrNum(s)
+      if (id === null || isNaN(id) || idsTraites.has(id)) return
+      idsTraites.add(id)
+      aAjouteDesBranches = true
 
-    const normalized = (s[scoreKey] ?? 0) / 100
-    let baseColor = interpolateColor(darkColor, activeColor, normalized)
-    
-    if (targetId !== null && id !== targetId) {
-      baseColor = interpolateColor('#1a2634', baseColor, 0.3)
+      const normalized = (s[scoreKey] ?? 0) / 100
+      // Plancher visuel : un score de 0 reçoit déjà une teinte (évite le quasi-noir)
+      const COLOR_FLOOR = 0.25
+      const visualT = COLOR_FLOOR + normalized * (1 - COLOR_FLOOR)
+      let baseColor = interpolateColor(darkColor, activeColor, visualT)
+      if (targetId !== null && id !== targetId) {
+        baseColor = interpolateColor('#1a2634', baseColor, 0.3)
+      }
+      colorExpr.push(id, baseColor)
+      heightExpr.push(id, is3D ? Math.round(200 + normalized * 1200) : 0)
+    })
+
+    if (!aAjouteDesBranches) {
+      map.current.setPaintProperty('zone-3d', 'fill-extrusion-color', darkColor)
+      map.current.setPaintProperty('zone-3d', 'fill-extrusion-height', 0)
+      return
     }
-    
-    colorExpr.push(id, baseColor)
-    heightExpr.push(id, is3D ? Math.round(200 + normalized * 1200) : 0)
-  })
 
-  // S'assurer qu'au moins une branche valide a été ajoutée pour éviter l'erreur "Expected at least 4 arguments"
-  if (!aAjouteDesBranches) {
-    // Si aucun score valide, on applique la couleur par défaut directement sans l'expression 'match'
-    map.current.setPaintProperty('zone-3d', 'fill-extrusion-color', darkColor)
-    map.current.setPaintProperty('zone-3d', 'fill-extrusion-height', 0)
-    return
-  }
+    colorExpr.push(darkColor)
+    heightExpr.push(0)
 
-  // Ajout de la valeur par défaut requise à la fin du match
-  colorExpr.push(darkColor)
-  heightExpr.push(0)
+    try {
+      map.current.setPaintProperty('zone-3d', 'fill-extrusion-color', colorExpr)
+      map.current.setPaintProperty('zone-3d', 'fill-extrusion-height', heightExpr)
+      map.current.setPaintProperty('zone-3d', 'fill-extrusion-opacity', is3D ? 0.75 : 0.85)
+    } catch (error) {
+      console.error("Erreur lors de l'application du style MapLibre:", error)
+    }
+  }, [scores, scoreKey, activeColor, activeIndicateur?.darkColor, mapReady, is3D, selected, granularite, zonesLoaded])
 
-  // Application sécurisée à MapLibre
-  try {
-    map.current.setPaintProperty('zone-3d', 'fill-extrusion-color', colorExpr)
-    map.current.setPaintProperty('zone-3d', 'fill-extrusion-height', heightExpr)
-    map.current.setPaintProperty('zone-3d', 'fill-extrusion-opacity', is3D ? 0.75 : 0.85)
-  } catch (error) {
-    console.error("Erreur lors de l'application du style MapLibre:", error)
-  }
-}, [scores, scoreKey, activeColor, activeIndicateur?.darkColor, mapReady, is3D, selected, granularite, zonesLoaded])
-  // Fetch points MongoDB au clic
   useEffect(() => {
     clearMarkers()
     if (!mapReady || !activeIndicateur?.pointsEndpoint || !selected) return
@@ -359,7 +352,6 @@ useEffect(() => {
       .catch(console.error)
   }, [activeIndicateur?.id, mapReady, selected, granularite])
 
-  // Toggle markers visibilité
   useEffect(() => {
     Object.entries(markersByTypeId.current).forEach(([typeId, markers]) => {
       const show = visibleTypes.includes(typeId)
@@ -367,7 +359,6 @@ useEffect(() => {
     })
   }, [visibleTypes])
 
-  // 3D toggle
   useEffect(() => {
     if (!map.current) return
     map.current.easeTo({ pitch: is3D ? 45 : 0, bearing: is3D ? -15 : 0, duration: 600 })

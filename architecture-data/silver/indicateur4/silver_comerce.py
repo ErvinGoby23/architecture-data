@@ -2,10 +2,14 @@ import pandas as pd
 import os
 from datetime import datetime
 
+# Ancrage des chemins sur l'emplacement du script (indépendant du répertoire courant)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BRUTE_DIR = os.path.normpath(os.path.join(BASE_DIR, '..', '..', 'brute'))
+
 # ==========================================
 # 0. Configuration & Paramètres
 # ==========================================
-output_dir = 'nettoyage-indicateur-commerces'
+output_dir = os.path.join(BASE_DIR, 'nettoyage-indicateur-commerces')
 os.makedirs(output_dir, exist_ok=True)
 output_file = os.path.join(output_dir, 'commerces_paris_silver.parquet')
 
@@ -14,7 +18,7 @@ print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Début du traitement Silver
 # ==========================================
 # 1. Chargement & Préparation (Source Brute)
 # ==========================================
-FILE = '../../brute/Score densité de services du quotidien/les-commerces-par-commune-ou-arrondissement-base-permanente-des-equipements.csv'
+FILE = os.path.join(BRUTE_DIR, 'Score densité de services du quotidien', 'les-commerces-par-commune-ou-arrondissement-base-permanente-des-equipements.csv')
 df = pd.read_csv(FILE, sep=';', engine='python')
 df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
 print(f"   ↳ Lignes initiales (Toute l'IDF) : {len(df):,}")

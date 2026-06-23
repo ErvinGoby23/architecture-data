@@ -6,11 +6,15 @@ import os
 import sys
 from datetime import datetime
 
+# Ancrage des chemins sur l'emplacement du script (indépendant du répertoire courant)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BRUTE_DIR = os.path.normpath(os.path.join(BASE_DIR, '..', '..', 'brute'))
+
 # ==========================================
 # 0. Configuration & Paramètres
 # ==========================================
 date_str = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime('%Y-%m-%d')
-output_dir = os.path.join('nettoyage-indicateur1', date_str)
+output_dir = os.path.join(BASE_DIR, 'nettoyage-indicateur1', date_str)
 os.makedirs(output_dir, exist_ok=True)
 output_file = os.path.join(output_dir, 'ecoles_elementaires_paris_silver.parquet')
 
@@ -19,12 +23,15 @@ output_file = os.path.join(output_dir, 'ecoles_elementaires_paris_silver.parquet
 # ==========================================
 print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 Début du traitement Silver : Écoles Élémentaires")
 
-df = pd.read_csv('../../brute/Score densité de services du quotidien/etablissements-scolaires-ecoles-elementaires.csv',
+df = pd.read_csv(os.path.join(BRUTE_DIR, 'Score densité de services du quotidien', 'etablissements-scolaires-ecoles-elementaires.csv'),
                  sep=None, engine='python')
 df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
 print(f"   ↳ Lignes initiales : {len(df):,}")
 
-df_arr = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
+df_arr = pd.read_csv(os.path.join(BRUTE_DIR, 'indicateur-Score-accessibilité-mobilité', 'arrondissements.csv'), sep=';')
+
+# Polygones des quartiers (sous-arrondissements) — même source que l'indicateur 1
+df_qu = pd.read_csv(os.path.join(BRUTE_DIR, 'indicateur-Score-accessibilité-mobilité', 'quartiers.csv'), sep=';')
 
 # Renommage (standard snake_case)
 df = df.rename(columns={
@@ -97,21 +104,52 @@ if col_num:
     resultat['arrondissement'] = resultat[col_num].fillna(0).astype(int)
     resultat['code_postal']    = (resultat['arrondissement'] + 75000).where(resultat['arrondissement'] > 0)
 
+# Nettoyage de la colonne technique de la 1ère jointure avant la 2ème
+resultat = resultat.drop(columns=[c for c in ['index_right'] if c in resultat.columns])
+
+# ==========================================
+# 4 bis. Jointure Spatiale (Quartiers / sous-arrondissements)
+# ==========================================
+def parse_qu_geometry(geom_str):
+    try:
+        return shape(json.loads(geom_str)) if pd.notna(geom_str) else None
+    except Exception:
+        return None
+
+geo_col_qu = next((c for c in df_qu.columns if 'geometry' in c.lower() and 'x y' not in c.lower()), None)
+if not geo_col_qu:
+    geo_col_qu = next((c for c in df_qu.columns if 'geom' in c.lower()), None)
+
+df_qu['geometry'] = df_qu[geo_col_qu].apply(parse_qu_geometry)
+df_qu = df_qu.dropna(subset=['geometry'])
+gdf_qu = gpd.GeoDataFrame(df_qu, geometry='geometry', crs="EPSG:4326")
+
+cols_qu = [c for c in ['C_QU', 'L_QU', 'geometry'] if c in gdf_qu.columns]
+
+# On repart de la GeoDataFrame des écoles (géométrie ponctuelle conservée)
+resultat = gpd.GeoDataFrame(resultat, geometry=gpd.points_from_xy(resultat['lon'], resultat['lat']), crs="EPSG:4326")
+resultat = gpd.sjoin(resultat, gdf_qu[cols_qu], how='left', predicate='within')
+resultat = resultat.rename(columns={'C_QU': 'code_quartier', 'L_QU': 'nom_quartier'})
+
 # ==========================================
 # 5. Filtrage Final et Nettoyage
 # ==========================================
 # On supprime tout ce qui n'est pas tombé dans un arrondissement (Petite Couronne)
 df_final = resultat.dropna(subset=['code_postal']).copy()
 df_final['code_postal'] = df_final['code_postal'].astype(int)
+# code_quartier peut être NaN pour de rares points en bordure : on caste seulement les valides
+df_final['code_quartier'] = pd.to_numeric(df_final['code_quartier'], errors='coerce').astype('Int64')
 
 # Nettoyage des colonnes inutiles pour la couche Silver
-# Ajout de 'annee_scolaire' car l'historique n'est plus conservé
+# On conserve code_quartier + nom_quartier (granularité sous-arrondissement)
 cols_drop_final = [
     'geo_shape', 'geo_point_2d', 'Arrondissement', 'canton_ville',
     'index_right', 'geometry', col_num, 'arrondissement', 'code_insee', 
     'arrondissement_insee', 'libelle_source', 'annee_scolaire'
 ]
 df_final = df_final.drop(columns=[c for c in cols_drop_final if c in df_final.columns])
+# Sécurité : retirer tout résidu de jointure spatiale (index_right, index_right_left, ...)
+df_final = df_final.drop(columns=[c for c in df_final.columns if c.startswith('index_right')])
 
 # ==========================================
 # 6. Exportation Parquet
