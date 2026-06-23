@@ -1,6 +1,12 @@
 """
 gold_score_connectivite.py — Pipeline Gold · Indicateur 2 : Score de connectivité
 Urban Data Explorer — Granularité : ARRONDISSEMENT + QUARTIER
+
+Choix méthodologiques :
+- Arrondissement : score_fibre (0.45) + score_mobile (0.40) + score_couverture (0.15)
+- Quartier : score_mobile (0.70) + score_couverture (0.30)
+  → La fibre ARCEP n'est disponible qu'à la maille arrondissement,
+    elle est donc exclue du score quartier pour éviter un biais de nivellement intra-arrondissement.
 """
 
 import pandas as pd
@@ -38,6 +44,7 @@ PG_URL     = os.getenv('PG_URL')
 
 os.makedirs(GOLD_DIR, exist_ok=True)
 
+
 # ==========================================================================
 # FONCTIONS COMMUNES
 # ==========================================================================
@@ -49,38 +56,47 @@ def normalize(series):
     return (series - min_v) / (max_v - min_v)
 
 
-def calculer_scores(df):
-    """Calcule taux, scores normalisés et score final — fonctionne pour arr. et quartier."""
+def calculer_scores(df, niveau='arrondissement'):
+    """
+    Calcule les scores normalisés et le score final.
+    - niveau='arrondissement' : inclut la fibre (donnée native à ce niveau)
+    - niveau='quartier'       : exclut la fibre (données héritées = biais de nivellement)
+    """
     df = df.copy()
 
-    # Taux métier
-    df['taux_fibre'] = (df['locaux_fibres_T4_2025'] / df['locaux_total'].replace(0, 1) * 100).round(2)
-    df['taux_5g']    = (df['nb_antennes_5g'] / df['nb_antennes'].replace(0, 1) * 100).round(2)
-    df['taux_4g']    = (df['nb_antennes_4g'] / df['nb_antennes'].replace(0, 1) * 100).round(2)
+    # Taux métier communs
+    df['taux_5g'] = (df['nb_antennes_5g'] / df['nb_antennes'].replace(0, 1) * 100).round(2)
+    df['taux_4g'] = (df['nb_antennes_4g'] / df['nb_antennes'].replace(0, 1) * 100).round(2)
 
-    df['nb_antennes_par_km2']    = (df['nb_antennes']    / df['surface_km2']).round(2)
-    df['nb_antennes_5g_par_km2'] = (df['nb_antennes_5g'] / df['surface_km2']).round(2)
-    df['nb_antennes_4g_par_km2'] = (df['nb_antennes_4g'] / df['surface_km2']).round(2)
-
-    for col in ['taux_fibre', 'taux_5g', 'taux_4g']:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    # Normalisation
-    df['score_fibre']   = normalize(df['taux_fibre'])
-    df['score_mobile']  = normalize(
-        df['nb_antennes_5g'] * 4 +
-        df['nb_antennes_4g'] * 3 +
-        df['nb_antennes_3g'] * 2 +
-        df['nb_antennes_2g'] * 1
+    # Densité surfacique (par km²) — pondérée par génération
+    df['score_mobile'] = normalize(
+        (df['nb_antennes_5g'] * 4 +
+         df['nb_antennes_4g'] * 3 +
+         df['nb_antennes_3g'] * 2 +
+         df['nb_antennes_2g'] * 1) / df['surface_km2']
     )
-    df['score_densite'] = normalize(df['nb_antennes_par_km2'])
 
-    # Score final
-    df['score_connectivite'] = (
-        df['score_fibre']   * 0.45 +
-        df['score_mobile']  * 0.40 +
-        df['score_densite'] * 0.15
-    ).round(4)
+    # Couverture récente (mix taux 4G + 5G)
+    df['score_couverture'] = normalize(df['taux_4g'] + df['taux_5g'])
+
+    if niveau == 'arrondissement':
+        df['taux_fibre'] = (
+            df['locaux_fibres_T4_2025'] / df['locaux_total'].replace(0, 1) * 100
+        ).round(2)
+        df['taux_fibre'] = pd.to_numeric(df['taux_fibre'], errors='coerce')
+        df['score_fibre'] = normalize(df['taux_fibre'])
+
+        df['score_connectivite'] = (
+            df['score_fibre']     * 0.45 +
+            df['score_mobile']    * 0.40 +
+            df['score_couverture']* 0.15
+        ).round(4)
+
+    else:  # quartier — fibre exclue
+        df['score_connectivite'] = (
+            df['score_mobile']    * 0.70 +
+            df['score_couverture']* 0.30
+        ).round(4)
 
     df['score_connectivite_100'] = (df['score_connectivite'] * 100).round(1)
     df['rang'] = df['score_connectivite'].rank(ascending=False, method='first').astype(int)
@@ -137,8 +153,9 @@ except Exception as e:
     engine = None
     print(f'⚠️ PostgreSQL non initialisé : {e}')
 
+
 # ==========================================================================
-# BLOC 1 — ARRONDISSEMENT
+# BLOC 1 — ARRONDISSEMENT (avec fibre)
 # ==========================================================================
 print("\n--- GOLD ARRONDISSEMENT ---")
 silver_arr_path = os.path.join(SILVER_DIR, 'indicateur_connectivite_silver.parquet')
@@ -148,17 +165,18 @@ if not os.path.exists(silver_arr_path):
 df_arr = pd.read_parquet(silver_arr_path)
 df_arr['arrondissement'] = df_arr['code_postal'].astype(int) - 75000
 df_arr = df_arr.merge(df_surface_arr, on='arrondissement', how='left')
-df_arr = calculer_scores(df_arr)
+df_arr = calculer_scores(df_arr, niveau='arrondissement')
 
 assert df_arr['score_connectivite'].isna().sum() == 0
 assert df_arr['score_connectivite'].between(0, 1).all()
+assert len(df_arr) == 20, f"❌ Nombre d'arrondissements incorrect : {len(df_arr)}"
 
 cols_arr = [
     'code_postal',
     'nb_antennes', 'nb_antennes_2g', 'nb_antennes_3g', 'nb_antennes_4g', 'nb_antennes_5g',
     'nb_antennes_orange', 'nb_antennes_sfr', 'nb_antennes_free', 'nb_antennes_bouygues',
     'operateur_leader', 'taux_fibre', 'taux_5g', 'taux_4g',
-    'score_fibre', 'score_mobile', 'score_densite',
+    'score_fibre', 'score_mobile', 'score_couverture',
     'score_connectivite', 'score_connectivite_100', 'rang', 'categorie'
 ]
 df_arr_gold = df_arr[[c for c in cols_arr if c in df_arr.columns]].sort_values('rang').reset_index(drop=True)
@@ -171,8 +189,9 @@ exporter(
     engine=engine
 )
 
+
 # ==========================================================================
-# BLOC 2 — QUARTIER
+# BLOC 2 — QUARTIER (sans fibre)
 # ==========================================================================
 print("\n--- GOLD QUARTIER ---")
 silver_qu_path = os.path.join(SILVER_DIR, 'indicateur_connectivite_quartier_silver.parquet')
@@ -181,16 +200,19 @@ if not os.path.exists(silver_qu_path):
 
 df_qu = pd.read_parquet(silver_qu_path)
 df_qu = df_qu.merge(df_surface_qu[['code_quartier', 'surface_km2']], on='code_quartier', how='left')
-df_qu = calculer_scores(df_qu)
+df_qu = calculer_scores(df_qu, niveau='quartier')
 
 assert df_qu['score_connectivite'].isna().sum() == 0
+assert df_qu['score_connectivite'].between(0, 1).all()
+assert len(df_qu) == 80, f"❌ Nombre de quartiers incorrect : {len(df_qu)}"
+assert df_qu['rang'].nunique() == 80, "❌ Rangs non uniques (quartier)"
 
 cols_qu = [
     'code_quartier', 'nom_quartier', 'arrondissement',
     'nb_antennes', 'nb_antennes_2g', 'nb_antennes_3g', 'nb_antennes_4g', 'nb_antennes_5g',
     'nb_antennes_orange', 'nb_antennes_sfr', 'nb_antennes_free', 'nb_antennes_bouygues',
-    'operateur_leader', 'taux_fibre', 'taux_5g', 'taux_4g',
-    'score_fibre', 'score_mobile', 'score_densite',
+    'operateur_leader', 'taux_5g', 'taux_4g',
+    'score_mobile', 'score_couverture',
     'score_connectivite', 'score_connectivite_100', 'rang', 'categorie'
 ]
 df_qu_gold = df_qu[[c for c in cols_qu if c in df_qu.columns]].sort_values('rang').reset_index(drop=True)

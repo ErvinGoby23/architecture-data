@@ -17,9 +17,6 @@ ROOT_DIR = os.path.dirname(BASE_DIR)
 PG_URL         = os.getenv("PG_URL",         "postgresql://postgres:test123@localhost:5432/postgres")
 PG_URL_REPLICA = os.getenv("PG_URL_REPLICA", "postgresql://postgres:test123@localhost:5433/postgres")
 
-# 
-# VERROU ANTI-DOUBLON (evite les runs concurrents en cas de catchup Prefect)
-# 
 LOCK_DIR = os.path.join(ROOT_DIR, "pipeline", "locks")
 
 def run_script(path: str, arg: str = None) -> float:
@@ -57,9 +54,9 @@ def check_pg_replica(logger) -> bool:
         logger.warning("PostgreSQL replica  (5433) : indisponible")
         return False
 
-# 
+# ──────────────────────────────────────────────
 # BRONZE
-# 
+# ──────────────────────────────────────────────
 @task(name="Bronze - Fetch stationnement", retries=2, retry_delay_seconds=60)
 def run_bronze_stationnement(date_str: str):
     logger = get_run_logger()
@@ -93,9 +90,9 @@ def run_bronze_antennes(date_str: str):
         logger.info(f"Fetch OK en {duration}s — {size_mb} MB")
     return {"duration": duration, "size_mb": size_mb, "skipped": skipped}
 
-# 
-# SILVER & GOLD TASKS
-# 
+# ──────────────────────────────────────────────
+# SILVER & GOLD — INDICATEUR 1 (Mobilité)
+# ──────────────────────────────────────────────
 @task(name="Silver - Arrets lignes", retries=1)
 def run_silver_arrets(date_str: str):
     logger = get_run_logger()
@@ -208,9 +205,71 @@ def run_gold_connectivite(date_str: str):
         logger.warning("Fallback actif : Parquet Gold reste la source canonique")
         return None
 
-# 
-# LOAD TEST — C1.1 Tests de charge PostgreSQL (Silver + Gold)
-# 
+# ──────────────────────────────────────────────
+# SILVER & GOLD — INDICATEUR 4 (Services du quotidien)
+# ──────────────────────────────────────────────
+@task(name="Silver - Commerces", retries=1)
+def run_silver_commerces(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Silver commerces — {date_str}")
+    script = os.path.join(ROOT_DIR, "silver", "indicateur4", "silver_comerce.py")
+    duration = run_script(script)  # pas de date : fichier statique
+    logger.info(f"Termine en {duration}s")
+    return duration
+
+@task(name="Silver - Commissariats", retries=1)
+def run_silver_commissariats(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Silver commissariats — {date_str}")
+    script = os.path.join(ROOT_DIR, "silver", "indicateur4", "silver_commissariats.py")
+    duration = run_script(script)  # pas de date : fichier statique
+    logger.info(f"Termine en {duration}s")
+    return duration
+
+@task(name="Silver - Ecoles elementaires", retries=1)
+def run_silver_ecoles(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Silver ecoles elementaires — {date_str}")
+    script = os.path.join(ROOT_DIR, "silver", "indicateur4", "silver_ecoles_elementaires.py")
+    duration = run_script(script, date_str)
+    logger.info(f"Termine en {duration}s")
+    return duration
+
+@task(name="Silver - Fusion indicateur 4", retries=1)
+def run_silver_fusion_ind4(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Fusion Silver ind4 (services) — {date_str}")
+    logger.info("Cible ecriture : PostgreSQL primary (5432) + MongoDB Atlas")
+    script = os.path.join(ROOT_DIR, "silver", "indicateur4", "silver_fusion_services.py")
+    try:
+        duration = run_script(script, date_str)
+        logger.info(f"Fusion ind4 OK en {duration}s")
+        logger.info("Resilience : Parquet OK — PostgreSQL primary ecrit, replica (5433) synchronise via WAL")
+        return duration
+    except Exception as e:
+        logger.warning(f"Fusion ind4 — PostgreSQL primary indisponible : {e}")
+        logger.warning("Fallback actif : Parquet reste la source canonique")
+        return None
+
+@task(name="Gold - Score services", retries=1)
+def run_gold_services(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Gold score services du quotidien — {date_str}")
+    logger.info("Cible ecriture : PostgreSQL primary (5432)")
+    script = os.path.join(ROOT_DIR, "gold", "indicateur4", "gold_score_services.py")
+    try:
+        duration = run_script(script, date_str)
+        logger.info(f"Gold services OK en {duration}s")
+        logger.info("Resilience : Parquet Gold OK — PostgreSQL primary ecrit, replica (5433) synchronise via WAL")
+        return duration
+    except Exception as e:
+        logger.warning(f"Gold services — PostgreSQL primary indisponible : {e}")
+        logger.warning("Fallback actif : Parquet Gold reste la source canonique")
+        return None
+
+# ──────────────────────────────────────────────
+# LOAD TEST — C1.1 Tests de charge PostgreSQL
+# ──────────────────────────────────────────────
 @task(name="Load Test - PostgreSQL Silver + Gold", retries=0)
 def run_load_test(date_str: str):
     logger = get_run_logger()
@@ -225,29 +284,17 @@ def run_load_test(date_str: str):
         logger.warning("Le pipeline continue — Parquet reste la source canonique")
         return None
 
-# 
+# ──────────────────────────────────────────────
 # FLOW PRINCIPAL
-# 
+# ──────────────────────────────────────────────
 @flow(name="Urban Data Explorer — Main Daily Batch")
 def main_pipeline():
     logger = get_run_logger()
     current_date = datetime.now().strftime("%Y-%m-%d")
 
-    # ----------------------------------------------------------------
-    # VERROU ANTI-DOUBLON
-    # Si Prefect a accumulé plusieurs runs en retard (catchup apres une
-    # coupure non propre du process .serve()), un seul run par date doit
-    # s'executer reellement. Les autres se coupent immediatement sans
-    # toucher aux fichiers Bronze, ce qui evite la race condition qui
-    # corrompt le JSON (ecritures concurrentes sur le meme fichier).
-    # ----------------------------------------------------------------
     os.makedirs(LOCK_DIR, exist_ok=True)
     lock_file = os.path.join(LOCK_DIR, f"{current_date}.lock")
 
-    # Creation atomique du verrou (O_EXCL) : meme si 2 runs demarrent a la
-    # milliseconde pres, l'OS garantit qu'un seul des deux reussit a creer
-    # le fichier. Pas de fenetre de race possible, contrairement a un
-    # simple "if exists: return" suivi d'un touch().
     try:
         fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.close(fd)
@@ -269,48 +316,56 @@ def main_pipeline():
         else:
             logger.warning("PostgreSQL indisponible — pipeline en mode Parquet uniquement")
 
-        # BRONZE en parallèle
+        # ── BRONZE en parallèle ──────────────────────────────────────────
         future_stat = run_bronze_stationnement.submit(current_date)
         future_ant  = run_bronze_antennes.submit(current_date)
         perf_stat   = future_stat.result()
         perf_ant    = future_ant.result()
         logger.info("Bronze OK")
 
-        # SILVER ind1 en parallèle
-        future_arrets = run_silver_arrets.submit(current_date)
-        future_taxi   = run_silver_taxi.submit(current_date)
-        future_stat_s = run_silver_stationnement.submit(current_date)
-
-        # SILVER ind2 en parallèle
-        future_ant_s  = run_silver_antennes_s.submit(current_date)
-        future_fibre  = run_silver_fibre.submit(current_date)
+        # ── SILVER ind1 + ind2 + ind4 en parallèle ───────────────────────
+        future_arrets   = run_silver_arrets.submit(current_date)
+        future_taxi     = run_silver_taxi.submit(current_date)
+        future_stat_s   = run_silver_stationnement.submit(current_date)
+        future_ant_s    = run_silver_antennes_s.submit(current_date)
+        future_fibre    = run_silver_fibre.submit(current_date)
+        future_commer   = run_silver_commerces.submit(current_date)
+        future_commis   = run_silver_commissariats.submit(current_date)
+        future_ecoles   = run_silver_ecoles.submit(current_date)
 
         future_arrets.result()
         future_taxi.result()
         future_stat_s.result()
         future_ant_s.result()
         future_fibre.result()
+        future_commer.result()
+        future_commis.result()
+        future_ecoles.result()
         logger.info("Silver OK")
 
-        # FUSIONS en parallèle
+        # ── FUSIONS en parallèle ─────────────────────────────────────────
         future_fusion1 = run_silver_fusion_ind1.submit(current_date)
         future_fusion2 = run_silver_fusion_ind2.submit(current_date)
+        future_fusion4 = run_silver_fusion_ind4.submit(current_date)
         future_fusion1.result()
         future_fusion2.result()
+        future_fusion4.result()
         logger.info("Fusions OK")
 
-        # GOLD en parallèle
-        future_mob  = run_gold_mobilite.submit(current_date)
-        future_conn = run_gold_connectivite.submit(current_date)
+        # ── GOLD en parallèle ────────────────────────────────────────────
+        future_mob      = run_gold_mobilite.submit(current_date)
+        future_conn     = run_gold_connectivite.submit(current_date)
+        future_services = run_gold_services.submit(current_date)
         future_mob.result()
         future_conn.result()
+        future_services.result()
         logger.info("Gold OK")
 
-        # LOAD TEST
+        # ── LOAD TEST ────────────────────────────────────────────────────
         run_load_test(current_date)
         logger.info("Load test OK")
 
-        # RAPPORT DE PERFORMANCE (C2.4)
+        # ── RAPPORT DE PERFORMANCE (C2.4) ────────────────────────────────
         total_duration = round(time.time() - global_start, 1)
         bronze_skipped = perf_stat.get("skipped", False) or perf_ant.get("skipped", False)
 
@@ -318,11 +373,13 @@ def main_pipeline():
         silver_files = [
             os.path.join(ROOT_DIR, "silver", "indicateur1", "nettoyage-indicateur1", current_date, "indicateur_mobilite_silver.parquet"),
             os.path.join(ROOT_DIR, "silver", "indicateur2", "nettoyage-indicateur2", current_date, "indicateur_connectivite_silver.parquet"),
+            os.path.join(ROOT_DIR, "silver", "indicateur4", "indicateur_services", "indicateur_services_quotidien.parquet"),
         ]
         vol_silver = round(sum(file_size_mb(f) for f in silver_files), 2)
         gold_files = [
             os.path.join(ROOT_DIR, "gold", "indicateur1", current_date, "score_mobilite_gold.parquet"),
             os.path.join(ROOT_DIR, "gold", "indicateur2", current_date, "score_connectivite_gold.parquet"),
+            os.path.join(ROOT_DIR, "gold", "indicateur4", current_date, "score_services_gold.parquet"),
         ]
         vol_gold = round(sum(file_size_mb(f) for f in gold_files), 2)
         total_volume = round(vol_bronze + vol_silver + vol_gold, 2)
@@ -342,9 +399,6 @@ def main_pipeline():
         logger.info("=====================================")
 
     except Exception:
-        # Si le run plante en cours de route, on retire le verrou pour
-        # permettre un vrai retry plus tard (sinon le pipeline reste
-        # bloque jusqu'au lendemain meme apres une vraie erreur reseau).
         if os.path.exists(lock_file):
             os.remove(lock_file)
         raise
@@ -354,5 +408,5 @@ if __name__ == "__main__":
     main_pipeline.serve(
         name="daily-urban-explorer-sync",
         cron="0 3 * * *",
-        pause_on_shutdown=True,  # pause le schedule si .serve() est arrete proprement (Ctrl+C)
+        pause_on_shutdown=True,
     )
