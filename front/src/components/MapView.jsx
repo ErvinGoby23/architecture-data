@@ -94,7 +94,6 @@ function buildPopupHTML(label, data, indicateurId) {
     }
     return html
   }
-
   return header
 }
 
@@ -114,7 +113,7 @@ export default function MapView({
   const popup           = useRef(null)
   const markersByTypeId = useRef({})
   const allPointsCache  = useRef({})
-  const [mapReady, setMapReady]     = useState(false)
+  const [mapReady, setMapReady]       = useState(false)
   const [zonesLoaded, setZonesLoaded] = useState(0)
 
   const visibleTypesRef     = useRef(visibleTypes)
@@ -125,6 +124,10 @@ export default function MapView({
   useEffect(() => { granulariteRef.current = granularite }, [granularite])
   const scoresRef           = useRef(scores)
   useEffect(() => { scoresRef.current = scores }, [scores])
+  const onSelectRef         = useRef(onSelect)
+  useEffect(() => { onSelectRef.current = onSelect }, [onSelect])
+  const selectedRef         = useRef(selected)
+  useEffect(() => { selectedRef.current = selected }, [selected])
 
   const clearMarkers = () => {
     Object.values(markersByTypeId.current).flat().forEach(m => { try { m.remove() } catch (_) {} })
@@ -199,7 +202,7 @@ export default function MapView({
 
         map.current.addSource('zones', { type: 'geojson', data: geojson })
         map.current.addLayer({ id: 'zone-3d', type: 'fill-extrusion', source: 'zones',
-          paint: { 'fill-extrusion-color': '#00d4aa', 'fill-extrusion-height': 100, 'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.75 }
+          paint: { 'fill-extrusion-color': '#00d4aa', 'fill-extrusion-height': 100, 'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.55 }
         })
         map.current.addLayer({ id: 'zone-outline', type: 'line', source: 'zones',
           paint: { 'line-color': '#0a0e1a', 'line-width': isQuartier ? 1 : 1.5 }
@@ -234,7 +237,12 @@ export default function MapView({
           map.current.getCanvas().style.cursor = ''
         })
         map.current.on('click', 'zone-3d', (e) => {
-          onSelect(e.features[0].properties._id_zone)
+          const id = e.features[0].properties._id_zone
+          if (parseInt(id) === parseInt(selectedRef.current)) {
+            onSelectRef.current(null)  // désélectionne au 2e clic
+          } else {
+            onSelectRef.current(id)
+          }
         })
 
         setZonesLoaded(n => n + 1)
@@ -255,7 +263,11 @@ export default function MapView({
         glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
         sources: { osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256 } },
         layers: [{ id: 'osm-tiles', type: 'raster', source: 'osm',
-          paint: { 'raster-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0.15, 13, 0.6, 15, 1.0] }
+          paint: {
+            'raster-opacity': ['interpolate', ['linear'], ['zoom'], 11, 0.55, 13, 0.85, 15, 1.0],
+            'raster-brightness-min': 0.3,
+            'raster-brightness-max': 0.9,
+          }
         }]
       },
       center: [2.3488, 48.8534], zoom: 11.5, pitch: 45, bearing: -15, antialias: true,
@@ -300,12 +312,9 @@ export default function MapView({
       aAjouteDesBranches = true
 
       const normalized = (s[scoreKey] ?? 0) / 100
-      // Plancher visuel : un score de 0 reçoit déjà une teinte (évite le quasi-noir)
-      const COLOR_FLOOR = 0.25
-      const visualT = COLOR_FLOOR + normalized * (1 - COLOR_FLOOR)
-      let baseColor = interpolateColor(darkColor, activeColor, visualT)
+      let baseColor = getHeatColor(normalized)
       if (targetId !== null && id !== targetId) {
-        baseColor = interpolateColor('#1a2634', baseColor, 0.3)
+        baseColor = interpolateColor('#1a2634', baseColor, 0.4)
       }
       colorExpr.push(id, baseColor)
       heightExpr.push(id, is3D ? Math.round(200 + normalized * 1200) : 0)
@@ -370,6 +379,24 @@ export default function MapView({
       <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
     </div>
   )
+}
+
+function getHeatColor(normalized) {
+  const colors = [
+    { t: 0.0,  hex: '#1a9850' },
+    { t: 0.25, hex: '#91cf60' },
+    { t: 0.5,  hex: '#fee08b' },
+    { t: 0.75, hex: '#fc8d59' },
+    { t: 1.0,  hex: '#d73027' },
+  ]
+  for (let i = 0; i < colors.length - 1; i++) {
+    const a = colors[i], b = colors[i + 1]
+    if (normalized <= b.t) {
+      const t2 = (normalized - a.t) / (b.t - a.t)
+      return interpolateColor(a.hex, b.hex, t2)
+    }
+  }
+  return colors[colors.length - 1].hex
 }
 
 function interpolateColor(hex1, hex2, t) {

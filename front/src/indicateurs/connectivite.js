@@ -20,11 +20,11 @@ export const connectivite = {
     { id: 'antenne', label: 'Antennes relais', color: '#4f8ef7', mongoType: 'antenne' },
   ],
 
-  scoreBars: (data) => [
-    { label: 'Fibre (%)',  value: (data.taux_fibre ?? 0) / 100 },
-    { label: '5G (%)',     value: (data.taux_5g    ?? 0) / 100 },
-    { label: '4G (%)',     value: (data.taux_4g    ?? 0) / 100 },
-  ],
+scoreBars: (data) => [
+  { label: 'Fibre',      value: data.score_fibre      ?? 0 },
+  { label: 'Mobile',     value: data.score_mobile     ?? 0 },
+  { label: 'Couverture', value: data.score_couverture ?? 0 },
+],
 
   stats: (data) => [
     { label: 'Total antennes',   value: data.nb_antennes,      unit: '' },

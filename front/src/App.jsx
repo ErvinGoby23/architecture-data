@@ -2,40 +2,39 @@ import { useState, useEffect } from 'react'
 import MapView  from './components/MapView'
 import Sidebar  from './components/Sidebar'
 import { INDICATEURS } from './indicateurs/index'
-// 1. On ajoute l'import de fetchScoresServices
 import { fetchScoresMobilite, fetchScoresConnectivite, fetchScoresServices } from './api/index'
 import './index.css'
+import RankingPanel from './components/RankingPanel'
+import ComparePanel from './components/ComparePanel'
 
-// 2. On ajoute 'services' au dictionnaire des fetchers
 const SCORES_FETCHERS = {
   mobilite:     fetchScoresMobilite,
   connectivite: fetchScoresConnectivite,
-  services:     fetchScoresServices, 
+  services:     fetchScoresServices,
 }
 
 export default function App() {
   const [activeIndicateur, setActiveIndicateur] = useState(INDICATEURS[0])
-  const [selected, setSelected] = useState(null)
-  const [is3D, setIs3D]         = useState(true)
+  const [selected, setSelected]   = useState(null)
+  const [is3D, setIs3D]           = useState(true)
   const [visibleTypes, setVisibleTypes] = useState(
     INDICATEURS[0].pointTypes?.map(p => p.id) ?? []
   )
-  const [granularite, setGranularite] = useState('arrondissement') // 1. Lifted state
+  const [granularite, setGranularite] = useState('arrondissement')
   const [year, setYear]           = useState(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [scores, setScores]       = useState([])
   const [loading, setLoading]     = useState(true)
+  const [compareMode, setCompareMode] = useState(false)
+  const [compareList, setCompareList] = useState([])
 
-  // 2. Included granularite in API fetcher dependency array
   useEffect(() => {
     const fetcher = SCORES_FETCHERS[activeIndicateur.id]
     if (!fetcher) return
     setLoading(true)
-    
-    // Pass granularite to your backend fetcher alongside the year filter
-    fetcher({ 
-      granularite, 
-      year: activeIndicateur.hasYearFilter ? year : null 
+    fetcher({
+      granularite,
+      year: activeIndicateur.hasYearFilter ? year : null
     })
       .then(data => { setScores(data); setLoading(false) })
       .catch(() => setLoading(false))
@@ -58,6 +57,18 @@ export default function App() {
     setRefreshKey(k => k + 1)
   }
 
+  const handleSelect = (id) => {
+    if (!compareMode) {
+      setSelected(id)
+      return
+    }
+    setCompareList(prev => {
+      if (prev.includes(id)) return prev
+      if (prev.length >= 3) return prev
+      return [...prev, id]
+    })
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -66,13 +77,18 @@ export default function App() {
           <h1>Urban Data Explorer</h1>
         </div>
         <div className="header-controls">
+          <button
+            className={`btn-toggle ${compareMode ? 'active' : ''}`}
+            onClick={() => { setCompareMode(v => !v); setCompareList([]) }}
+          >
+            ⚖ Comparer
+          </button>
           <button className={`btn-toggle ${is3D ? 'active' : ''}`} onClick={() => setIs3D(v => !v)}>
             {is3D ? '3D' : '2D'}
           </button>
         </div>
       </header>
 
-      {/* 3. Pass state and setter down to Sidebar */}
       <Sidebar
         indicateurs={INDICATEURS}
         activeIndicateur={activeIndicateur}
@@ -84,22 +100,43 @@ export default function App() {
         year={year}
         onYearChange={handleYearChange}
         granularite={granularite}
-        onGranulariteChange={(g) => { setGranularite(g); setSelected(null); }} 
+        onGranulariteChange={(g) => { setGranularite(g); setSelected(null) }}
       />
 
-      {/* 4. Pass down to MapView so map layers update synchronously */}
-      <MapView
-        scores={scores}
-        scoreKey={activeIndicateur.scoreKey}
-        activeColor={activeIndicateur.color}
-        activeIndicateur={activeIndicateur}
-        visibleTypes={visibleTypes}
-        selected={selected}
-        onSelect={setSelected}
-        is3D={is3D}
-        loading={loading}
-        granularite={granularite}
-      />
+      <div style={{ position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
+          <MapView
+            scores={scores}
+            scoreKey={activeIndicateur.scoreKey}
+            activeColor={activeIndicateur.color}
+            activeIndicateur={activeIndicateur}
+            visibleTypes={visibleTypes}
+            selected={selected}
+            onSelect={handleSelect}
+            is3D={is3D}
+            loading={loading}
+            granularite={granularite}
+          />
+          <RankingPanel
+            scores={scores}
+            activeIndicateur={activeIndicateur}
+            granularite={granularite}
+            onSelect={handleSelect}
+            selected={selected}
+          />
+        </div>
+
+        {compareMode && (
+          <ComparePanel
+            compareList={compareList}
+            scores={scores}
+            activeIndicateur={activeIndicateur}
+            granularite={granularite}
+            onRemove={(id) => setCompareList(prev => prev.filter(i => i !== id))}
+            onClear={() => { setCompareList([]); setCompareMode(false) }}
+          />
+        )}
+      </div>
     </div>
   )
 }

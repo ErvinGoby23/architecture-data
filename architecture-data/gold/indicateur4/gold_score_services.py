@@ -14,8 +14,6 @@ from sqlalchemy import create_engine, text
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR    = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
 
-# Chargement du .env ancré sur l'arborescence du projet (et non sur le répertoire courant).
-# On essaie ROOT_DIR/.env puis le dossier parent de ROOT_DIR.
 for _env_candidate in [
     os.path.join(ROOT_DIR, '.env'),
     os.path.join(ROOT_DIR, '..', '.env'),
@@ -27,12 +25,10 @@ for _env_candidate in [
 else:
     print("⚠️  Aucun fichier .env trouvé — variables d'environnement système utilisées si présentes.")
 
-# Fusions Silver (produites par silver_fusion_services.py)
 SILVER_DIR_IND4       = os.path.join(ROOT_DIR, 'silver', 'indicateur4', 'indicateur_services')
 SILVER_FUSION_PATH    = os.path.join(SILVER_DIR_IND4, 'indicateur_services_quotidien.parquet')
 SILVER_FUSION_QU_PATH = os.path.join(SILVER_DIR_IND4, 'indicateur_services_quotidien_quartier.parquet')
 
-# On force la date du jour pour l'export Gold
 date_str = datetime.now().strftime('%Y-%m-%d')
 
 print(f"=== GOLD (IND4 - SERVICES) — Date d'export : {date_str} ===")
@@ -119,21 +115,17 @@ if not os.path.exists(SILVER_FUSION_PATH):
 df = pd.read_parquet(SILVER_FUSION_PATH)
 print(f"Shape fusion silver arrondissement : {df.shape}")
 
-# Enrichissement surface
 df['arrondissement'] = df['code_postal'].astype(int) - 75000
 df = df.merge(df_surface_arr, on='arrondissement', how='left')
 
-# Indicateurs par km²
 df['ecoles_par_km2']        = (df['nb_ecoles']          / df['surface_km2']).round(2)
 df['commissariats_par_km2'] = (df['nb_commissariats']   / df['surface_km2']).round(2)
 df['commerces_par_km2']     = (df['nb_commerces_total'] / df['surface_km2']).round(2)
 
-# Normalisation
 df['score_ecoles']        = normalize(df['ecoles_par_km2'])
 df['score_commissariats'] = normalize(df['commissariats_par_km2'])
 df['score_commerces']     = normalize(df['commerces_par_km2'])
 
-# Score final pondéré : 40% commerces, 35% écoles, 25% commissariats
 df['score_services'] = (
     df['score_commerces']     * 0.40 +
     df['score_ecoles']        * 0.35 +
@@ -151,7 +143,6 @@ df['categorie'] = pd.cut(
 
 df_arr_gold = df.sort_values('rang').reset_index(drop=True)
 
-# Validation
 assert df_arr_gold['score_services'].isna().sum() == 0,   "❌ NaN dans score_services (arrondissement)"
 assert df_arr_gold['score_services'].between(0, 1).all(), "❌ Score hors [0,1] (arrondissement)"
 assert len(df_arr_gold) == 20,                            f"❌ Nombre d'arrondissements incorrect : {len(df_arr_gold)} (attendu 20)"
@@ -160,7 +151,7 @@ assert df_arr_gold['rang'].nunique() == 20,               "❌ Rangs non uniques
 cols_keep_arr = [
     'code_postal', 'arrondissement',
     'nb_ecoles', 'nb_commissariats', 'nb_commerces_total',
-    'supermarche', 'boulangerie', 'epicerie', 'superette',  # Exemples de détails conservés
+    'supermarche', 'boulangerie', 'epicerie', 'superette',
     'ecoles_par_km2', 'commissariats_par_km2', 'commerces_par_km2',
     'score_ecoles', 'score_commissariats', 'score_commerces',
     'score_services', 'score_services_100',
@@ -181,27 +172,34 @@ exporter(
 
 
 # ==========================================================================
-# BLOC 2 - SCORE PAR QUARTIER (ecoles + commissariats, SANS commerces)
+# BLOC 2 - SCORE PAR QUARTIER (80 quartiers, ecoles + commissariats, SANS commerces)
 # ==========================================================================
 print("\n--- GOLD QUARTIER ---")
 
 if not os.path.exists(SILVER_FUSION_QU_PATH):
     raise FileNotFoundError(f"❌ Fusion silver quartier introuvable : {SILVER_FUSION_QU_PATH}")
 
-df_qu = pd.read_parquet(SILVER_FUSION_QU_PATH)
-print(f"Shape fusion silver quartier : {df_qu.shape}")
+# Partir de la référence complète pour garantir 80 quartiers
+df_qu = df_surface_qu[['code_quartier', 'nom_quartier', 'arrondissement', 'surface_km2']].copy()
 
-# Enrichissement surface + complétion nom_quartier/arrondissement depuis la référence
-df_qu = df_qu.merge(
-    df_surface_qu[['code_quartier', 'nom_quartier', 'arrondissement', 'surface_km2']],
-    on='code_quartier', how='left', suffixes=('', '_ref')
-)
+# Merger avec les données silver (left join depuis la référence)
+df_silver_qu = pd.read_parquet(SILVER_FUSION_QU_PATH)
+df_qu = df_qu.merge(df_silver_qu, on='code_quartier', how='left')
+
+print(f"Shape fusion silver quartier : {df_silver_qu.shape}")
+print(f"Shape après merge référence  : {df_qu.shape}")
+
+# Remplir les NaN par 0 pour les quartiers sans données
+df_qu['nb_ecoles']        = df_qu['nb_ecoles'].fillna(0).astype(int)
+df_qu['nb_commissariats'] = df_qu['nb_commissariats'].fillna(0).astype(int)
+
+# Complétion nom_quartier/arrondissement depuis la référence si absent
 for col in ['nom_quartier', 'arrondissement']:
     if f'{col}_ref' in df_qu.columns:
         df_qu[col] = df_qu[col].fillna(df_qu[f'{col}_ref'])
         df_qu = df_qu.drop(columns=[f'{col}_ref'])
 
-# Indicateurs par km² (pas de commerces a ce niveau)
+# Indicateurs par km²
 df_qu['ecoles_par_km2']        = (df_qu['nb_ecoles']        / df_qu['surface_km2']).round(2)
 df_qu['commissariats_par_km2'] = (df_qu['nb_commissariats'] / df_qu['surface_km2']).round(2)
 
@@ -226,10 +224,11 @@ df_qu['categorie'] = pd.cut(
 
 df_qu_gold = df_qu.sort_values('rang').reset_index(drop=True)
 
-# Validation (assouplie : le nombre de quartiers peut varier)
+# Validation
 assert df_qu_gold['score_services'].isna().sum() == 0,   "❌ NaN dans score_services (quartier)"
 assert df_qu_gold['score_services'].between(0, 1).all(), "❌ Score hors [0,1] (quartier)"
-assert df_qu_gold['rang'].nunique() == len(df_qu_gold),  "❌ Rangs non uniques (quartier)"
+assert len(df_qu_gold) == 80,                            f"❌ Nombre de quartiers incorrect : {len(df_qu_gold)} (attendu 80)"
+assert df_qu_gold['rang'].nunique() == 80,               "❌ Rangs non uniques (quartier)"
 print(f"   ↳ Quartiers traités : {len(df_qu_gold)}")
 
 cols_keep_qu = [

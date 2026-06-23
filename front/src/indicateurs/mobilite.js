@@ -32,13 +32,13 @@ export const mobilite = {
     { id: 'electrique',           label: 'Électrique',     color: '#cc5de8', mongoType: 'electrique' },
   ],
 
-  scoreBars: (data) => [
-    { label: 'Arrêts (%)',        value: data.taux_arrets    / 100 },
-    { label: 'Lignes (%)',        value: data.taux_lignes    / 100 },
-    { label: 'Taxi (%)',          value: data.taux_taxi      / 100 },
-    { label: 'Stationnement (%)', value: data.taux_gratuit   / 100 },
-    { label: '2-Roues (%)',       value: data.taux_2roues    / 100 },
-    { label: 'PMR (%)',           value: data.taux_pmr       / 100 },
-    { label: 'Électrique (%)',    value: data.taux_electrique/ 100 },
-  ],
+    scoreBars: (data) => [
+      { label: 'Arrêts',         value: data.score_arrets },
+      { label: 'Lignes',         value: data.score_lignes },
+      { label: 'Taxi',           value: data.score_taxi },
+      { label: 'Stationnement',  value: data.score_gratuit },
+      { label: '2-Roues',        value: data.score_2roues },
+      { label: 'PMR',            value: data.score_pmr },
+      { label: 'Électrique',     value: data.score_electrique },
+    ],
 }

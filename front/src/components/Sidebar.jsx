@@ -118,18 +118,17 @@ export default function Sidebar({
         <p className="sidebar-section-title">Légende</p>
         <div className="legend">
           {[
-            { label: 'Score élevé',  opacity: 1 },
-            { label: 'Score moyen',  opacity: 0.6 },
-            { label: 'Score faible', opacity: 0.25 },
+            { label: 'Score élevé',  color: '#00d4aa' },
+            { label: 'Score moyen',  color: '#f7934f' },
+            { label: 'Score faible', color: '#ef4444' },
           ].map((l, i) => (
             <div className="legend-item" key={i}>
-              <div className="legend-swatch" style={{ background: activeColor, opacity: l.opacity }} />
+              <div className="legend-swatch" style={{ background: l.color }} />
               <span>{l.label}</span>
             </div>
           ))}
         </div>
       </div>
-
       {/* 6. DÉTAIL ZONE */}
       <div className="sidebar-section" style={{ flex: 1 }}>
         <p className="sidebar-section-title">
