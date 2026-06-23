@@ -2,12 +2,15 @@ import { useState, useEffect } from 'react'
 import MapView  from './components/MapView'
 import Sidebar  from './components/Sidebar'
 import { INDICATEURS } from './indicateurs/index'
-import { fetchScoresMobilite, fetchScoresConnectivite } from './api/index'
+// 1. On ajoute l'import de fetchScoresServices
+import { fetchScoresMobilite, fetchScoresConnectivite, fetchScoresServices } from './api/index'
 import './index.css'
 
+// 2. On ajoute 'services' au dictionnaire des fetchers
 const SCORES_FETCHERS = {
   mobilite:     fetchScoresMobilite,
   connectivite: fetchScoresConnectivite,
+  services:     fetchScoresServices, 
 }
 
 export default function App() {

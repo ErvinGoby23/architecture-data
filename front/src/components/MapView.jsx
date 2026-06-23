@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
-import { fetchPointsMobilite, fetchPointsConnectivite } from '../api/index'
+import { fetchPointsMobilite, fetchPointsConnectivite, fetchPointsServices } from '../api/index'
 
 // Associe chaque indicateur à sa fonction de fetch MongoDB
 const POINTS_FETCHERS = {
   mobilite:     fetchPointsMobilite,
   connectivite: fetchPointsConnectivite,
+  services:     fetchPointsServices,
 }
 
 // URL GeoJSON Open Data Paris — contours officiels des 20 arrondissements
@@ -25,7 +26,10 @@ const MODES = [
 // Génère le HTML du popup au survol d'un arrondissement
 function buildPopupHTML(arrNum, cp, data, indicateurId) {
   if (!data) return `<div class="popup-cp">Paris ${arrNum}e</div><div class="popup-postal">${cp}</div>`
-  const score = data.score_mobilite_100 ?? data.score_connectivite_100 ?? '—'
+  
+  // 1. Récupération dynamique du bon score
+  const score = data.score_mobilite_100 ?? data.score_connectivite_100 ?? data.score_services_100 ?? '—'
+  
   const header = `
     <div class="popup-cp">Paris ${arrNum}e <span class="popup-postal-inline">${cp}</span></div>
     <div class="popup-score">${score}<span>/100</span></div>
@@ -73,9 +77,26 @@ function buildPopupHTML(arrNum, cp, data, indicateurId) {
       </div>
     `
   }
+  if (indicateurId === 'services') {
+    return header + `
+      <div class="popup-section-title">Infrastructures</div>
+      <div class="popup-grid">
+        <div class="popup-stat"><span class="popup-stat-val">${data.nb_ecoles ?? 0}</span><span class="popup-stat-lbl">Écoles</span></div>
+        <div class="popup-stat"><span class="popup-stat-val">${data.nb_commissariats ?? 0}</span><span class="popup-stat-lbl">Commissariats</span></div>
+      </div>
+      <div class="popup-divider"></div>
+      <div class="popup-section-title">Commerces locaux</div>
+      <div class="popup-grid">
+        <div class="popup-stat"><span class="popup-stat-val">${data.nb_commerces_total ?? 0}</span><span class="popup-stat-lbl">Total</span></div>
+        <div class="popup-stat"><span class="popup-stat-val">${data.boulangerie ?? 0}</span><span class="popup-stat-lbl">Boulangeries</span></div>
+        <div class="popup-stat"><span class="popup-stat-val">${data.supermarche ?? 0}</span><span class="popup-stat-lbl">Supermarchés</span></div>
+        <div class="popup-stat"><span class="popup-stat-val">${data.epicerie ?? 0}</span><span class="popup-stat-lbl">Épiceries</span></div>
+      </div>
+    `
+  }
+
   return header
 }
-
 export default function MapView({ scores, scoreKey, activeColor, activeIndicateur, visibleTypes, selected, onSelect, is3D, loading }) {
   const mapContainer = useRef(null)
   const map          = useRef(null)
@@ -208,23 +229,42 @@ export default function MapView({ scores, scoreKey, activeColor, activeIndicateu
   }, [scores, scoreKey, activeIndicateur?.id])
 
   // Met à jour les couleurs et hauteurs 3D des arrondissements selon les scores
+// Met à jour les couleurs et hauteurs 3D des arrondissements selon les scores
   useEffect(() => {
     if (!mapReady || !map.current || !scores.length || !scoreKey) return
-    const colorExpr  = ['match', ['get', 'c_ar']]
-    const heightExpr = ['match', ['get', 'c_ar']]
-    const targetArrNum = selected ? selected - 75000 : null
-    const darkColor = activeIndicateur?.darkColor ?? '#0d1117'
+    
+    // 1. SÉCURITÉ : On utilise le code_postal exact (String) au lieu du c_ar
+    const colorExpr  = ['match', ['get', 'code_postal']]
+    const heightExpr = ['match', ['get', 'code_postal']]
+    
+    const targetCP = selected ? String(selected) : null
+    
+    // On éclaircit très légèrement le fond noir par défaut
+    const darkColor = activeIndicateur?.darkColor ?? '#1a202c' 
+    
     scores.forEach(s => {
-      const arrNum = s.code_postal - 75000  // ← calcul depuis code_postal
-      const normalized = (s[scoreKey] ?? 0) / 100
-      let baseColor = interpolateColor(darkColor, activeColor, normalized)
-      if (targetArrNum !== null && arrNum !== targetArrNum) {
-        baseColor = interpolateColor('#1a2634', baseColor, 0.3)
+      const cp = String(s.code_postal) // "75001"
+      
+      const rawNorm = (s[scoreKey] ?? 0) / 100
+      
+      // 2. CORRECTION VISUELLE : Même le score 0 aura 15% de jaune pour ne pas être invisible
+      const normalizedColor = 0.15 + (rawNorm * 0.85) 
+      
+      let baseColor = interpolateColor(darkColor, activeColor, normalizedColor)
+      
+      // Si on clique sur un arrondissement, on assombrit les autres
+      if (targetCP !== null && cp !== targetCP) {
+        baseColor = interpolateColor('#0f172a', baseColor, 0.3)
       }
-      colorExpr.push(arrNum, baseColor)
-      heightExpr.push(arrNum, is3D ? Math.round(200 + normalized * 1200) : 0)
+      
+      colorExpr.push(cp, baseColor)
+      
+      // La hauteur, par contre, utilise la vraie valeur (le dernier restera le plus plat)
+      heightExpr.push(cp, is3D ? Math.round(200 + rawNorm * 1200) : 0)
     })
+    
     colorExpr.push(darkColor); heightExpr.push(0)
+    
     map.current.setPaintProperty('arrondissements-3d', 'fill-extrusion-color', colorExpr)
     map.current.setPaintProperty('arrondissements-3d', 'fill-extrusion-height', heightExpr)
     map.current.setPaintProperty('arrondissements-3d', 'fill-extrusion-opacity', is3D ? 0.75 : 0.85)

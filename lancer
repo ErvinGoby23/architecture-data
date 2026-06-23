@@ -1,11 +1,15 @@
 prefect server start
 uvicorn main:app --reload --port 8000   
 npm run dev
-python pipiline_orchestral
+python pipeline_orchestrator.py / python -c "from pipeline_orchestrator import main_pipeline; main_pipeline()"
 
 docker compose down -v
 docker compose up -d
 docker compose logs postgres-replica
+
+
+cd C:\Users\rayan\OneDrive\Documents\architecture-data\architecture-data\pipeline
+python -c "from pipeline_orchestrator import main_pipeline; main_pipeline()"
 
 exemple .env : 
 
@@ -23,3 +27,11 @@ POSTGRES_DB=postgres
 
 
 docker exec -it postgres-primary psql -U postgres -c "\dt gold.*"
+
+
+
+
+Bronze >>> EDA >>> silver (normalisation et postgress, versioning, mongodb) >>> gold(denormalisation, postgress versioning du parquet) >>> api >>> front
+
+
+front: API >>> indicateur >>> map view >>> sidebar >>>

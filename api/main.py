@@ -6,7 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from dependencies import limiter
-from routers import mobilite, connectivite
+
+# 1. AJOUTER L'IMPORT DU NOUVEAU ROUTEUR ICI
+from routers import mobilite, connectivite, services
 
 app = FastAPI(
     title="Urban Data Explorer API",
@@ -35,11 +37,11 @@ app.add_middleware(
     allow_headers=["X-API-Key"],
 )
 
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
 app.include_router(mobilite.router)
 app.include_router(connectivite.router)
+
+# 2. AJOUTER LE ROUTEUR À L'APPLICATION ICI
+app.include_router(services.router)
 
 @app.get("/", tags=["Info"])
 def root():
@@ -54,5 +56,7 @@ def get_quota():
             "/mobilite/points/geojson":     "30 requêtes/minute",
             "/connectivite":                "60 requêtes/minute",
             "/connectivite/points/geojson": "30 requêtes/minute",
+            "/services":                    "60 requêtes/minute",
+            "/services/points/geojson":     "30 requêtes/minute",
         },
     }
