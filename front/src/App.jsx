@@ -20,18 +20,26 @@ export default function App() {
   const [visibleTypes, setVisibleTypes] = useState(
     INDICATEURS[0].pointTypes?.map(p => p.id) ?? []
   )
-  const [year, setYear] = useState(null)
-  const [scores, setScores]   = useState([])
-  const [loading, setLoading] = useState(true)
+  const [granularite, setGranularite] = useState('arrondissement') // 1. Lifted state
+  const [year, setYear]           = useState(null)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [scores, setScores]       = useState([])
+  const [loading, setLoading]     = useState(true)
 
+  // 2. Included granularite in API fetcher dependency array
   useEffect(() => {
     const fetcher = SCORES_FETCHERS[activeIndicateur.id]
     if (!fetcher) return
     setLoading(true)
-    fetcher()
+    
+    // Pass granularite to your backend fetcher alongside the year filter
+    fetcher({ 
+      granularite, 
+      year: activeIndicateur.hasYearFilter ? year : null 
+    })
       .then(data => { setScores(data); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [activeIndicateur.id, year])
+  }, [activeIndicateur.id, granularite, year, refreshKey])
 
   useEffect(() => {
     setVisibleTypes(activeIndicateur.pointTypes?.map(p => p.id) ?? [])
@@ -43,6 +51,11 @@ export default function App() {
         ? prev.filter(t => t !== typeId)
         : [...prev, typeId]
     )
+  }
+
+  const handleYearChange = (y) => {
+    setYear(y)
+    setRefreshKey(k => k + 1)
   }
 
   return (
@@ -59,18 +72,22 @@ export default function App() {
         </div>
       </header>
 
+      {/* 3. Pass state and setter down to Sidebar */}
       <Sidebar
         indicateurs={INDICATEURS}
         activeIndicateur={activeIndicateur}
-        onSelectIndicateur={(ind) => { setActiveIndicateur(ind); setSelected(null) }}
+        onSelectIndicateur={(ind) => { setActiveIndicateur(ind); setSelected(null); setYear(null) }}
         selected={selected}
         scores={scores}
         visibleTypes={visibleTypes}
         onToggleType={handleToggleType}
         year={year}
-        onYearChange={setYear}
+        onYearChange={handleYearChange}
+        granularite={granularite}
+        onGranulariteChange={(g) => { setGranularite(g); setSelected(null); }} 
       />
 
+      {/* 4. Pass down to MapView so map layers update synchronously */}
       <MapView
         scores={scores}
         scoreKey={activeIndicateur.scoreKey}
@@ -81,6 +98,7 @@ export default function App() {
         onSelect={setSelected}
         is3D={is3D}
         loading={loading}
+        granularite={granularite}
       />
     </div>
   )

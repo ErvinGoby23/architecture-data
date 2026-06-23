@@ -35,3 +35,4 @@ Bronze >>> EDA >>> silver (normalisation et postgress, versioning, mongodb) >>> 
 
 
 front: API >>> indicateur >>> map view >>> sidebar >>>
+docker exec -it postgres-urban psql -U postgres -c "\dt gold.*"

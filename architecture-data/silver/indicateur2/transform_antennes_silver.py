@@ -1,6 +1,6 @@
 """
 transform_antennes_silver.py — Pipeline Silver · Indicateur 2 : Antennes relais
-Urban Data Explorer
+Urban Data Explorer — Granularité : ARRONDISSEMENT + QUARTIER
 """
 
 import pandas as pd
@@ -30,7 +30,6 @@ else:
 
 print(f"Date bronze utilisée : {date_str}")
 path_antennes = os.path.join(BRONZE_BASE, date_str, 'antennes-relais.json')
-
 print(f"📖 Lecture des données brutes du jour : {path_antennes}")
 
 with open(path_antennes, encoding='utf-8') as f:
@@ -40,24 +39,18 @@ df = pd.DataFrame(data['records'])
 df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
 print(f"Shape brute : {df.shape}")
 
-#  Extraction coords vectorisée 
+# Extraction coordonnées
 geo = df['geo_point_2d'].tolist()
 df['latitude']  = pd.to_numeric([x.get('lat') if isinstance(x, dict) else None for x in geo], errors='coerce')
 df['longitude'] = pd.to_numeric([x.get('lon') if isinstance(x, dict) else None for x in geo], errors='coerce')
 
-# Suppression colonnes inutiles
-cols_drop = [
-    'geo_point_2d', 'geo_shape', 'mise_en_serv_5g_700', 'se_anno_cad_data',
-    'adresse', 'mise_en_serv', 'mise_en_serv_4g', 'mise_en_serv_5g_3500'
-]
+cols_drop = ['geo_point_2d', 'geo_shape', 'mise_en_serv_5g_700', 'se_anno_cad_data',
+             'adresse', 'mise_en_serv', 'mise_en_serv_4g', 'mise_en_serv_5g_3500']
 df = df.drop(columns=[c for c in cols_drop if c in df.columns])
 
-# Nettoyage vectorisé
 df['operateur'] = df['operateur'].str.upper().str.strip()
 df['type']      = df['type'].fillna('NON RENSEIGNÉ')
 
-
-#  Génération dominante (hiérarchie 5G > 4G > 3G > 2G)
 def generation(t):
     if pd.isna(t) or t == 'NON RENSEIGNÉ': return '2G'
     if '5G' in t: return '5G'
@@ -76,7 +69,7 @@ print(f"Antennes 4G : {df['has_4g'].sum()} ({df['has_4g'].mean()*100:.1f}%)")
 print(f"Antennes 3G : {df['has_3g'].sum()} ({df['has_3g'].mean()*100:.1f}%)")
 print(f"Antennes 2G : {df['has_2g'].sum()} ({df['has_2g'].mean()*100:.1f}%)")
 print(f"Total vérifié : {df[['has_5g','has_4g','has_3g','has_2g']].sum().sum()} == {len(df)}")
-# Filtrage coords
+
 before = len(df)
 df = df.dropna(subset=['latitude', 'longitude'])
 print(f"Sans coords supprimés : {before - len(df)}")
@@ -90,12 +83,23 @@ df = df.drop_duplicates(subset=['code_site'])
 print(f"Doublons supprimés : {before - len(df)}")
 print(f"Shape après nettoyage : {df.shape}")
 
-# Spatial join sur les vraies frontières des arrondissements
-df_arr    = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
+# GeoDataFrame points antennes
+gdf_antennes = gpd.GeoDataFrame(
+    df,
+    geometry=gpd.points_from_xy(df['longitude'], df['latitude']),
+    crs="EPSG:4326"
+)
 
 def parse_geometry(geom_str):
-    return shape(json.loads(geom_str)) if pd.notna(geom_str) else None
+    try:
+        return shape(json.loads(geom_str)) if pd.notna(geom_str) else None
+    except Exception:
+        return None
 
+# ==========================================================================
+# JOINTURE 1 — ARRONDISSEMENT (comme avant)
+# ==========================================================================
+df_arr    = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
 geo_col_arr = next((c for c in df_arr.columns if c.strip() == 'Geometry'), None)
 if not geo_col_arr:
     geo_col_arr = next((c for c in df_arr.columns if 'geom' in c.lower() and 'x y' not in c.lower()), None)
@@ -105,51 +109,83 @@ col_insee = next((c for c in df_arr.columns if 'insee' in c.lower()), None)
 df_arr['geometry'] = df_arr[geo_col_arr].apply(parse_geometry)
 gdf_arr = gpd.GeoDataFrame(df_arr, geometry='geometry', crs="EPSG:4326")
 
-gdf_antennes = gpd.GeoDataFrame(
-    df,
-    geometry=gpd.points_from_xy(df['longitude'], df['latitude']),
-    crs="EPSG:4326"
-)
-
 cols_arr = [c for c in [col_num, col_insee, 'geometry'] if c]
-resultat = gpd.sjoin(gdf_antennes, gdf_arr[cols_arr], how='inner', predicate='within')
-print(f"Shape après jointure spatiale : {resultat.shape}")
+resultat_arr = gpd.sjoin(gdf_antennes, gdf_arr[cols_arr], how='inner', predicate='within')
+print(f"Shape après jointure arrondissement : {resultat_arr.shape}")
 
 if col_num:
-    resultat['arrondissement'] = resultat[col_num].fillna(0).astype(int)
-    resultat['code_postal']    = (resultat['arrondissement'] + 75000).where(resultat['arrondissement'] > 0)
+    resultat_arr['arrondissement'] = resultat_arr[col_num].fillna(0).astype(int)
+    resultat_arr['code_postal']    = (resultat_arr['arrondissement'] + 75000).where(resultat_arr['arrondissement'] > 0)
 
-df_final = pd.DataFrame(resultat.drop(columns=[
-    c for c in ['index_right', 'geometry', col_num, col_insee] if c in resultat.columns
+df_final_arr = pd.DataFrame(resultat_arr.drop(columns=[
+    c for c in ['index_right', 'geometry', col_num, col_insee] if c in resultat_arr.columns
 ]))
+df_final_arr = df_final_arr[df_final_arr['arrondissement'].between(1, 20)].copy()
+df_final_arr['code_postal'] = df_final_arr['code_postal'].astype(int)
 
-df_final = df_final[df_final['arrondissement'].between(1, 20)].copy()
-df_final['code_postal'] = df_final['code_postal'].astype(int)
+print(f"Antennes Paris (arrondissement) retenues : {len(df_final_arr):,}")
 
-print(f"Antennes Paris retenues : {len(df_final):,}")
-print(f"Code postaux uniques : {sorted(df_final['code_postal'].unique())}")
+# ==========================================================================
+# JOINTURE 2 — QUARTIER
+# ==========================================================================
+df_qu = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/quartiers.csv', sep=';')
+df_qu.columns = df_qu.columns.str.strip()
 
-# Suppression colonnes inutiles finales
-cols_drop_final = ['ardt']
-df_final = df_final.drop(columns=[c for c in cols_drop_final if c in df_final.columns])
+geo_col_qu = next((c for c in df_qu.columns if 'geometry' in c.lower() and 'x y' not in c.lower()), None)
+if not geo_col_qu:
+    geo_col_qu = next((c for c in df_qu.columns if 'geom' in c.lower()), None)
 
-# Validation spatiale 
+df_qu['geometry'] = df_qu[geo_col_qu].apply(parse_geometry)
+df_qu = df_qu.dropna(subset=['geometry'])
+gdf_qu = gpd.GeoDataFrame(df_qu, geometry='geometry', crs="EPSG:4326")
+
+cols_qu = ['C_QU', 'L_QU', 'C_AR', 'geometry']
+cols_qu = [c for c in cols_qu if c in gdf_qu.columns]
+
+resultat_qu = gpd.sjoin(gdf_antennes, gdf_qu[cols_qu], how='inner', predicate='within')
+print(f"Shape après jointure quartier : {resultat_qu.shape}")
+
+resultat_qu = resultat_qu.rename(columns={
+    'C_QU': 'code_quartier',
+    'L_QU': 'nom_quartier',
+    'C_AR': 'arrondissement',
+})
+
+df_final_qu = pd.DataFrame(resultat_qu.drop(columns=[
+    c for c in ['index_right', 'geometry'] if c in resultat_qu.columns
+]))
+df_final_qu['code_quartier']  = df_final_qu['code_quartier'].astype(int)
+df_final_qu['arrondissement'] = df_final_qu['arrondissement'].astype(int)
+
+print(f"Antennes Paris (quartier) retenues : {len(df_final_qu):,}")
+print(f"Quartiers uniques : {df_final_qu['code_quartier'].nunique()}")
+
+# ==========================================================================
+# VALIDATION SPATIALE
+# ==========================================================================
 print("\n=== VALIDATION SPATIALE (échantillon 5 points) ===")
-sample = df_final.groupby('code_postal').first().reset_index()[
+sample = df_final_arr.groupby('code_postal').first().reset_index()[
     ['code_postal', 'latitude', 'longitude', 'operateur']
 ].head(5)
 for _, r in sample.iterrows():
-    print(
-        f"  CP {int(r['code_postal'])} | {r['operateur']}\n"
-        f"  → https://www.google.com/maps?q={r['latitude']},{r['longitude']}"
-    )
+    print(f"  CP {int(r['code_postal'])} | {r['operateur']}\n"
+          f"  → https://www.google.com/maps?q={r['latitude']},{r['longitude']}")
 
-# Export Parquet
+# ==========================================================================
+# EXPORT PARQUET
+# ==========================================================================
 output_dir = os.path.join('nettoyage-indicateur2', date_str)
 os.makedirs(output_dir, exist_ok=True)
-output = os.path.join(output_dir, 'antennes_relais_paris_silver.parquet')
 
-df_final.to_parquet(output, index=False)
-print(f"\n✓ Fichier Parquet créé : {output}")
-print(f"Shape finale : {df_final.shape}")
-print(f"Colonnes : {list(df_final.columns)}")
+# Parquet arrondissement (identique à l'ancien)
+output_arr = os.path.join(output_dir, 'antennes_relais_paris_silver.parquet')
+df_final_arr.to_parquet(output_arr, index=False)
+print(f"\n✓ Parquet arrondissement : {output_arr}")
+print(f"Shape : {df_final_arr.shape}")
+
+# Parquet quartier (nouveau)
+output_qu = os.path.join(output_dir, 'antennes_relais_quartier_paris_silver.parquet')
+df_final_qu.to_parquet(output_qu, index=False)
+print(f"✓ Parquet quartier : {output_qu}")
+print(f"Shape : {df_final_qu.shape}")
+print(f"Colonnes : {list(df_final_qu.columns)}")

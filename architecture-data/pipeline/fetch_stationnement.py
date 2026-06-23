@@ -29,11 +29,13 @@ dated_dir = os.path.join(OUTPUT_DIR, date_str)
 OUTPUT    = os.path.join(dated_dir, "stationnement-voie-publique-emplacements.json")
 
 # GARDE-FOU
+# Si le fichier du jour existe déjà, on arrête le script pour préserver le quota API
 if os.path.exists(OUTPUT):
     print(f"🛑 [SKIP] Le fetch du jour ({date_str}) pour le Stationnement a déjà été effectué.")
     sys.exit(0)
 
 # Helpers 
+# Compte le nombre de lignes disponibles pour un arrondissement donné
 def count_records_arrond(arrond: int) -> int:
     """Compte le nombre de lignes pour un arrondissement spécifique"""
     params = {"limit": 1, "offset": 0, "where": f"arrond={arrond}"}
@@ -45,6 +47,7 @@ def count_records_arrond(arrond: int) -> int:
         print(f"❌ Impossible de compter l'arrondissement {arrond}: {e}")
         return 0
 
+# Récupère une page de résultats pour un (arrondissement, offset) donné — appelée en parallèle
 def fetch_page_arrond(args) -> list:
     """Va chercher une page spécifique pour un arrondissement donné"""
     arrond, offset = args
@@ -64,10 +67,12 @@ os.makedirs(dated_dir, exist_ok=True)
 start_time = time.time()
 
 print("📊 Planification des requêtes par arrondissement...")
+# Compte d'abord le volume par arrondissement (dataset trop gros pour une pagination globale simple)
 totaux = {arrond: count_records_arrond(arrond) for arrond in range(1, 21)}
 for arrond, total in totaux.items():
     print(f"  [Arrond {arrond:02d}] {total} lignes détectées.")
 
+# Génère la liste de toutes les tâches (arrondissement, offset) à exécuter
 tasks_to_run = [
     (arrond, offset)
     for arrond, total in totaux.items()
@@ -78,6 +83,7 @@ all_records = []
 
 print(f"\n⚡ Envoi de {len(tasks_to_run)} requêtes ciblées en parallèle...")
 
+# Exécute toutes les requêtes de pagination en parallèle (3 threads simultanés)
 with ThreadPoolExecutor(max_workers=3) as executor:
     results = executor.map(fetch_page_arrond, tasks_to_run)
 
@@ -90,6 +96,7 @@ print(f"\n⏱️ Fetch stationnement terminé proprement en {end_time - start_ti
 print(f"Total brut collecté : {len(all_records):,} enregistrements")
 
 # SAUVEGARDE ET METADONNEES
+# Sauvegarde du snapshot brut daté en JSON
 output_data = {
     "source"        : URL,
     "dataset"       : DATASET,
@@ -105,6 +112,7 @@ print(f"\n💾 Snapshot historique unique créé : {OUTPUT}")
 
 file_size = os.path.getsize(OUTPUT)
 
+# Métadonnées de traçabilité du fetch (statut, taille, total collecté)
 metadata = {
     "dataset": DATASET,
     "source": URL,

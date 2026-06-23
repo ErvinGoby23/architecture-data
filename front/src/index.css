@@ -495,3 +495,37 @@ html, body, #root {
 }
 
 .year-filter { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* Year filter buttons */
+.year-filter {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.preset-btn {
+  flex: 1;
+  min-width: 48px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.preset-btn:hover {
+  border-color: var(--accent-connectivite);
+  color: var(--accent-connectivite);
+}
+
+.preset-btn.active {
+  background: color-mix(in srgb, var(--accent-connectivite) 15%, var(--surface2));
+  border-color: var(--accent-connectivite);
+  color: var(--accent-connectivite);
+}

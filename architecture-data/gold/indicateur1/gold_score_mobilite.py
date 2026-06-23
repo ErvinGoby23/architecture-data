@@ -1,6 +1,6 @@
 """
-gold_score_mobilite.py — Pipeline Gold · Indicateur 1 : Score de Mobilité (VERSION SÉCURISÉE)
-Urban Data Explorer
+gold_score_mobilite.py — Pipeline Gold · Indicateur 1 : Score de Mobilité
+Urban Data Explorer — Granularité : QUARTIER + ARRONDISSEMENT
 """
 
 import pandas as pd
@@ -40,125 +40,218 @@ PG_URL = os.getenv('PG_URL')
 os.makedirs(GOLD_DIR, exist_ok=True)
 
 
-# 1. LECTURE SILVER
-silver_parquet_path = os.path.join(SILVER_DIR, 'indicateur_mobilite_silver.parquet')
+# ==========================================================================
+# FONCTIONS COMMUNES
+# ==========================================================================
 
-if not os.path.exists(silver_parquet_path):
-    raise FileNotFoundError(f"❌ Le fichier Silver recherché est introuvable : {silver_parquet_path}")
-
-df = pd.read_parquet(silver_parquet_path)
-print(f"Shape silver : {df.shape}")
-
-# 2. ENRICHISSEMENT PAR LA SURFACE
-csv_path    = os.path.join(BRUTE_DIR, 'arrondissements.csv')
-df_arr      = pd.read_csv(csv_path, sep=';')
-col_surface = next((c for c in df_arr.columns if 'surface' in c.lower()), None)
-col_num     = next((c for c in df_arr.columns if 'numéro' in c.lower() and 'insee' not in c.lower() and 'séquentiel' not in c.lower()), None)
-
-df_surface = df_arr[[col_num, col_surface]].copy()
-df_surface.columns = ['arrondissement', 'surface_m2']
-df_surface['surface_km2'] = (df_surface['surface_m2'] / 1_000_000).round(4)
-df['arrondissement'] = df['code_postal'].astype(int) - 75000
-df = df.merge(df_surface, on='arrondissement', how='left')
-
-
-# 3. INDICATEURS PAR KM²
-df['nb_arrets_par_km2']         = (df['nb_arrets']           / df['surface_km2']).round(2)
-df['nb_lignes_par_km2']         = (df['nb_lignes']            / df['surface_km2']).round(2)
-df['nb_bornes_par_km2']         = (df['nb_bornes']            / df['surface_km2']).round(2)
-df['nb_places_gratuit_par_km2'] = (df['nb_places_gratuit']    / df['surface_km2']).round(2)
-df['nb_places_2roues_par_km2']  = (df['nb_places_2roues']     / df['surface_km2']).round(2)
-df['nb_places_pmr_par_km2']     = (df['nb_places_pmr']        / df['surface_km2']).round(2)
-df['nb_places_elec_par_km2']    = (df['nb_places_electrique'] / df['surface_km2']).round(2)
-
-
-# 4. NORMALISATION MIN-MAX (0 → 1)
 def normalize(series):
+    """Normalisation min-max → [0, 1]"""
     min_v, max_v = series.min(), series.max()
     if max_v == min_v:
         return pd.Series([0.5] * len(series), index=series.index)
     return (series - min_v) / (max_v - min_v)
 
-df['score_arrets']     = normalize(df['nb_arrets_par_km2'])
-df['score_lignes']     = normalize(df['nb_lignes_par_km2'])
-df['score_modes']      = normalize(df['nb_modes'])
-df['score_taxi']       = normalize(df['nb_bornes_par_km2'])
-df['score_gratuit']    = normalize(df['nb_places_gratuit_par_km2'])
-df['score_2roues']     = normalize(df['nb_places_2roues_par_km2'])
-df['score_pmr']        = normalize(df['nb_places_pmr_par_km2'])
-df['score_electrique'] = normalize(df['nb_places_elec_par_km2'])
+
+def calculer_scores(df, surface_col='surface_km2'):
+    """Calcule densités, taux relatifs, scores normalisés et score final pondéré."""
+
+    # Indicateurs par km²
+    df['nb_arrets_par_km2']         = (df['nb_arrets']           / df[surface_col]).round(2)
+    df['nb_lignes_par_km2']         = (df['nb_lignes']            / df[surface_col]).round(2)
+    df['nb_bornes_par_km2']         = (df['nb_bornes']            / df[surface_col]).round(2)
+    df['nb_places_gratuit_par_km2'] = (df['nb_places_gratuit']    / df[surface_col]).round(2)
+    df['nb_places_2roues_par_km2']  = (df['nb_places_2roues']     / df[surface_col]).round(2)
+    df['nb_places_pmr_par_km2']     = (df['nb_places_pmr']        / df[surface_col]).round(2)
+    df['nb_places_elec_par_km2']    = (df['nb_places_electrique'] / df[surface_col]).round(2)
+
+    # Taux relatifs au maximum parisien (0 → 100%)
+    df['taux_arrets']     = (df['nb_arrets_par_km2']         / df['nb_arrets_par_km2'].max()         * 100).round(1)
+    df['taux_lignes']     = (df['nb_lignes_par_km2']          / df['nb_lignes_par_km2'].max()          * 100).round(1)
+    df['taux_taxi']       = (df['nb_bornes_par_km2']          / df['nb_bornes_par_km2'].max()          * 100).round(1)
+    df['taux_gratuit']    = (df['nb_places_gratuit_par_km2']  / df['nb_places_gratuit_par_km2'].max()  * 100).round(1)
+    df['taux_2roues']     = (df['nb_places_2roues_par_km2']   / df['nb_places_2roues_par_km2'].max()   * 100).round(1)
+    df['taux_pmr']        = (df['nb_places_pmr_par_km2']      / df['nb_places_pmr_par_km2'].max()      * 100).round(1)
+    df['taux_electrique'] = (df['nb_places_elec_par_km2']     / df['nb_places_elec_par_km2'].max()     * 100).round(1)
+
+    # Normalisation min-max
+    df['score_arrets']     = normalize(df['nb_arrets_par_km2'])
+    df['score_lignes']     = normalize(df['nb_lignes_par_km2'])
+    df['score_modes']      = normalize(df['nb_modes'])
+    df['score_taxi']       = normalize(df['nb_bornes_par_km2'])
+    df['score_gratuit']    = normalize(df['nb_places_gratuit_par_km2'])
+    df['score_2roues']     = normalize(df['nb_places_2roues_par_km2'])
+    df['score_pmr']        = normalize(df['nb_places_pmr_par_km2'])
+    df['score_electrique'] = normalize(df['nb_places_elec_par_km2'])
+
+    # Score final pondéré
+    df['score_mobilite'] = (
+        df['score_arrets']     * 0.25 +
+        df['score_lignes']     * 0.20 +
+        df['score_modes']      * 0.10 +
+        df['score_taxi']       * 0.10 +
+        df['score_gratuit']    * 0.15 +
+        df['score_2roues']     * 0.10 +
+        df['score_pmr']        * 0.05 +
+        df['score_electrique'] * 0.05
+    ).round(4)
+
+    df['score_mobilite_100'] = (df['score_mobilite'] * 100).round(1)
+    df['rang'] = df['score_mobilite'].rank(ascending=False, method='first').astype(int)
+    df['categorie'] = pd.cut(
+        df['score_mobilite'],
+        bins=[0, 0.33, 0.66, 1.0],
+        labels=['Peu accessible', 'Accessible', 'Très accessible'],
+        include_lowest=True
+    )
+
+    return df
 
 
-# 5. SCORE FINAL PONDÉRÉ ET RANG
-df['score_mobilite'] = (
-    df['score_arrets']     * 0.25 +
-    df['score_lignes']     * 0.20 +
-    df['score_modes']      * 0.10 +
-    df['score_taxi']       * 0.10 +
-    df['score_gratuit']    * 0.15 +
-    df['score_2roues']     * 0.10 +
-    df['score_pmr']        * 0.05 +
-    df['score_electrique'] * 0.05
-).round(4)
+def exporter(df_gold, table_name, pk_col, parquet_path, engine):
+    """Export Parquet + PostgreSQL."""
+    df_gold.to_parquet(parquet_path, index=False)
+    print(f'✓ Parquet : {parquet_path}')
 
-df['score_mobilite_100'] = (df['score_mobilite'] * 100).round(1)
-df['rang'] = df['score_mobilite'].rank(ascending=False, method='first').astype(int)
-
-# Vectorisé avec pd.cut au lieu de apply(categorise)
-df['categorie'] = pd.cut(
-    df['score_mobilite'],
-    bins=[0, 0.33, 0.66, 1.0],
-    labels=['Peu accessible', 'Accessible', 'Très accessible'],
-    include_lowest=True
-)
-
-df_gold = df.sort_values('rang').reset_index(drop=True)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("CREATE SCHEMA IF NOT EXISTS gold;"))
+            conn.execute(text(f"DROP TABLE IF EXISTS gold.{table_name} CASCADE;"))
+            conn.commit()
+        df_gold.to_sql(table_name, engine, if_exists='replace', index=False, schema='gold')
+        with engine.connect() as conn:
+            conn.execute(text(f"ALTER TABLE gold.{table_name} ADD PRIMARY KEY ({pk_col})"))
+            conn.commit()
+        print(f'✓ PostgreSQL : gold.{table_name} ({len(df_gold)} lignes)')
+    except Exception as e:
+        print(f'❌ PostgreSQL indisponible pour {table_name} : {e}')
 
 
+# ==========================================================================
+# LECTURE SURFACE — QUARTIERS
+# ==========================================================================
+csv_quartiers = os.path.join(BRUTE_DIR, 'quartiers.csv')
+df_qu_ref = pd.read_csv(csv_quartiers, sep=';')
+df_qu_ref.columns = df_qu_ref.columns.str.strip()
 
-# 6. VALIDATION
-assert df_gold['score_mobilite'].isna().sum() == 0,   "❌ NaN dans score_mobilite"
-assert df_gold['score_mobilite'].between(0, 1).all(), "❌ Score hors [0,1]"
-assert len(df_gold) == 20,                            "❌ Nombre d'arrondissements incorrect"
-assert df_gold['rang'].nunique() == 20,               "❌ Les rangs ne sont pas uniques"
+col_surface_qu = next((c for c in df_qu_ref.columns if 'surface' in c.lower()), None)
+df_surface_qu = df_qu_ref[['C_QU', 'L_QU', 'C_AR', col_surface_qu]].copy()
+df_surface_qu.columns = ['code_quartier', 'nom_quartier', 'arrondissement', 'surface_m2']
+df_surface_qu['surface_km2'] = (df_surface_qu['surface_m2'] / 1_000_000).round(4)
 
-cols_keep = [
-    'code_postal',
+# LECTURE SURFACE — ARRONDISSEMENTS
+csv_arr = os.path.join(BRUTE_DIR, 'arrondissements.csv')
+df_arr_ref  = pd.read_csv(csv_arr, sep=';')
+col_surface_arr = next((c for c in df_arr_ref.columns if 'surface' in c.lower()), None)
+col_num_arr     = next((c for c in df_arr_ref.columns if 'numéro' in c.lower() and 'insee' not in c.lower() and 'séquentiel' not in c.lower()), None)
+df_surface_arr = df_arr_ref[[col_num_arr, col_surface_arr]].copy()
+df_surface_arr.columns = ['arrondissement', 'surface_m2']
+df_surface_arr['surface_km2'] = (df_surface_arr['surface_m2'] / 1_000_000).round(4)
+
+
+try:
+    engine = create_engine(PG_URL)
+except Exception as e:
+    engine = None
+    print(f'⚠️ Moteur PostgreSQL non initialisé : {e}')
+
+
+# ==========================================================================
+# BLOC 1 — SCORE PAR QUARTIER (80 quartiers)
+# ==========================================================================
+print("\n--- GOLD QUARTIER ---")
+
+silver_qu_path = os.path.join(SILVER_DIR, 'indicateur_mobilite_quartier_silver.parquet')
+if not os.path.exists(silver_qu_path):
+    raise FileNotFoundError(f"❌ Silver quartier introuvable : {silver_qu_path}")
+
+df_qu = pd.read_parquet(silver_qu_path)
+print(f"Shape silver quartier : {df_qu.shape}")
+
+df_qu = df_qu.merge(df_surface_qu[['code_quartier', 'nom_quartier', 'arrondissement', 'surface_km2']],
+                    on='code_quartier', how='left', suffixes=('', '_ref'))
+
+# Priorité aux colonnes _ref si nom_quartier/arrondissement absents
+for col in ['nom_quartier', 'arrondissement']:
+    if f'{col}_ref' in df_qu.columns:
+        df_qu[col] = df_qu[col].fillna(df_qu[f'{col}_ref'])
+        df_qu = df_qu.drop(columns=[f'{col}_ref'])
+
+df_qu = calculer_scores(df_qu, surface_col='surface_km2')
+
+# Validation
+assert df_qu['score_mobilite'].isna().sum() == 0,   "❌ NaN dans score_mobilite (quartier)"
+assert df_qu['score_mobilite'].between(0, 1).all(), "❌ Score hors [0,1] (quartier)"
+assert len(df_qu) == 80,                            f"❌ Nombre de quartiers incorrect : {len(df_qu)} (attendu 80)"
+assert df_qu['rang'].nunique() == 80,               "❌ Rangs non uniques (quartier)"
+
+cols_keep_qu = [
+    'code_quartier', 'nom_quartier', 'arrondissement',
     'nb_arrets', 'nb_lignes', 'nb_modes', 'modes_liste',
     'nb_arrets_bus', 'nb_arrets_metro', 'nb_arrets_rer', 'nb_arrets_tram',
     'nb_arrets_train', 'nb_arrets_train_regional', 'nb_arrets_funiculaire',
     'nb_bornes', 'nb_emplacements_taxi',
     'nb_places_2roues', 'nb_places_electrique', 'nb_places_gratuit',
     'nb_places_payant', 'nb_places_pmr',
+    'taux_arrets', 'taux_lignes', 'taux_taxi', 'taux_gratuit',
+    'taux_2roues', 'taux_pmr', 'taux_electrique',
     'score_arrets', 'score_lignes', 'score_modes', 'score_taxi',
     'score_gratuit', 'score_2roues', 'score_pmr', 'score_electrique',
-    'score_mobilite', 'score_mobilite_100',
-    'rang', 'categorie'
+    'score_mobilite', 'score_mobilite_100', 'rang', 'categorie'
 ]
-df_gold = df_gold[cols_keep]
+df_qu_gold = df_qu[[c for c in cols_keep_qu if c in df_qu.columns]].sort_values('rang').reset_index(drop=True)
+
+exporter(
+    df_qu_gold,
+    table_name='score_mobilite_quartier',
+    pk_col='code_quartier',
+    parquet_path=os.path.join(GOLD_DIR, 'score_mobilite_quartier_gold.parquet'),
+    engine=engine
+)
 
 
-# 7. EXPORT PARQUET
-parquet_path = os.path.join(GOLD_DIR, 'score_mobilite_gold.parquet')
-df_gold.to_parquet(parquet_path, index=False)
-print(f'✓ Fichier Parquet daté sauvegardé : {parquet_path}')
+# ==========================================================================
+# BLOC 2 — SCORE PAR ARRONDISSEMENT (20 arrondissements)
+# ==========================================================================
+print("\n--- GOLD ARRONDISSEMENT ---")
 
-# 8. EXPORT POSTGRESQL
-try:
-    engine = create_engine(PG_URL)
-    with engine.connect() as conn:
-        conn.execute(text("CREATE SCHEMA IF NOT EXISTS gold;"))
-        conn.execute(text("DROP TABLE IF EXISTS gold.score_mobilite CASCADE;"))
-        conn.commit()
-    df_gold.to_sql('score_mobilite', engine, if_exists='replace', index=False, schema='gold')
-    # Ajout PRIMARY KEY
-    with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE gold.score_mobilite ADD PRIMARY KEY (code_postal)"))
-        conn.commit()
-    print(f'✓ PostgreSQL : table gold.score_mobilite écrasée avec le jour J ({len(df_gold)} lignes)')
-    print(f'✓ PostgreSQL : table gold.score_mobilite écrasée avec le jour J ({len(df_gold)} lignes)')
-except Exception as e:
-    print(f'❌ PostgreSQL indisponible — export ignoré : {e}')
-    print('   Le Parquet reste la source canonique.')
+silver_arr_path = os.path.join(SILVER_DIR, 'indicateur_mobilite_arrondissement_silver.parquet')
+if not os.path.exists(silver_arr_path):
+    raise FileNotFoundError(f"❌ Silver arrondissement introuvable : {silver_arr_path}")
+
+df_arr = pd.read_parquet(silver_arr_path)
+print(f"Shape silver arrondissement : {df_arr.shape}")
+
+df_arr = df_arr.merge(df_surface_arr, on='arrondissement', how='left')
+df_arr = calculer_scores(df_arr, surface_col='surface_km2')
+
+# Validation
+assert df_arr['score_mobilite'].isna().sum() == 0,   "❌ NaN dans score_mobilite (arrondissement)"
+assert df_arr['score_mobilite'].between(0, 1).all(), "❌ Score hors [0,1] (arrondissement)"
+assert len(df_arr) == 20,                            f"❌ Nombre d'arrondissements incorrect : {len(df_arr)} (attendu 20)"
+assert df_arr['rang'].nunique() == 20,               "❌ Rangs non uniques (arrondissement)"
+
+cols_keep_arr = [
+    'arrondissement',
+    'nb_arrets', 'nb_lignes', 'nb_modes', 'modes_liste',
+    'nb_arrets_bus', 'nb_arrets_metro', 'nb_arrets_rer', 'nb_arrets_tram',
+    'nb_arrets_train', 'nb_arrets_train_regional', 'nb_arrets_funiculaire',
+    'nb_bornes', 'nb_emplacements_taxi',
+    'nb_places_2roues', 'nb_places_electrique', 'nb_places_gratuit',
+    'nb_places_payant', 'nb_places_pmr',
+    'taux_arrets', 'taux_lignes', 'taux_taxi', 'taux_gratuit',
+    'taux_2roues', 'taux_pmr', 'taux_electrique',
+    'score_arrets', 'score_lignes', 'score_modes', 'score_taxi',
+    'score_gratuit', 'score_2roues', 'score_pmr', 'score_electrique',
+    'score_mobilite', 'score_mobilite_100', 'rang', 'categorie'
+]
+df_arr_gold = df_arr[[c for c in cols_keep_arr if c in df_arr.columns]].sort_values('rang').reset_index(drop=True)
+
+exporter(
+    df_arr_gold,
+    table_name='score_mobilite_arrondissement',
+    pk_col='arrondissement',
+    parquet_path=os.path.join(GOLD_DIR, 'score_mobilite_arrondissement_gold.parquet'),
+    engine=engine
+)
 
 print('\n=== GOLD mobilité OK ===')

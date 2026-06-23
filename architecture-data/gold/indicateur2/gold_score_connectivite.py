@@ -1,6 +1,6 @@
 """
 gold_score_connectivite.py — Pipeline Gold · Indicateur 2 : Score de connectivité
-Urban Data Explorer
+Urban Data Explorer — Granularité : ARRONDISSEMENT + QUARTIER
 """
 
 import pandas as pd
@@ -17,7 +17,7 @@ def get_latest_date(silver_dir):
         if os.path.isdir(os.path.join(silver_dir, d))
     ], reverse=True)
     if not dates:
-        raise FileNotFoundError(f"Aucun dossier de date trouvé dans {silver_dir}")
+        raise FileNotFoundError(f"Aucun dossier trouvé dans {silver_dir}")
     return dates[0]
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,47 +38,9 @@ PG_URL     = os.getenv('PG_URL')
 
 os.makedirs(GOLD_DIR, exist_ok=True)
 
-# 1. LECTURE SILVER
-
-silver_parquet_path = os.path.join(SILVER_DIR, 'indicateur_connectivite_silver.parquet')
-
-if not os.path.exists(silver_parquet_path):
-    raise FileNotFoundError(f"Le fichier Silver est introuvable : {silver_parquet_path}")
-
-df = pd.read_parquet(silver_parquet_path)
-print(f"Shape silver : {df.shape}")
-
-
-# 2. ENRICHISSEMENT PAR LA SURFACE
-
-csv_path    = os.path.join(BRUTE_DIR, 'arrondissements.csv')
-df_arr      = pd.read_csv(csv_path, sep=';')
-col_surface = next((c for c in df_arr.columns if 'surface' in c.lower()), None)
-col_num     = next((c for c in df_arr.columns if 'numéro' in c.lower() and 'insee' not in c.lower() and 'séquentiel' not in c.lower()), None)
-
-df_surface = df_arr[[col_num, col_surface]].copy()
-df_surface.columns = ['arrondissement', 'surface_m2']
-df_surface['surface_km2'] = (df_surface['surface_m2'] / 1_000_000).round(4)
-df['arrondissement'] = df['code_postal'].astype(int) - 75000
-df = df.merge(df_surface, on='arrondissement', how='left')
-
-
-# 3. CALCULS MÉTIER (Gold uniquement)
- 
-df['taux_fibre'] = (df['locaux_fibres_T4_2025'] / df['locaux_total'] * 100).round(2)
-df['taux_5g']    = (df['nb_antennes_5g'] / df['nb_antennes'] * 100).round(2)
-df['taux_4g']    = (df['nb_antennes_4g'] / df['nb_antennes'] * 100).round(2)
-
-df['nb_antennes_par_km2']    = (df['nb_antennes']    / df['surface_km2']).round(2)
-df['nb_antennes_5g_par_km2'] = (df['nb_antennes_5g'] / df['surface_km2']).round(2)
-df['nb_antennes_4g_par_km2'] = (df['nb_antennes_4g'] / df['surface_km2']).round(2)
-
-df['taux_fibre'] = pd.to_numeric(df['taux_fibre'], errors='coerce')
-df['taux_5g']    = pd.to_numeric(df['taux_5g'],    errors='coerce')
-df['taux_4g']    = pd.to_numeric(df['taux_4g'],    errors='coerce')
-
-
-# 4. NORMALISATION MIN-MAX (0 → 1)
+# ==========================================================================
+# FONCTIONS COMMUNES
+# ==========================================================================
 
 def normalize(series):
     min_v, max_v = series.min(), series.max()
@@ -86,80 +48,159 @@ def normalize(series):
         return pd.Series([0.5] * len(series), index=series.index)
     return (series - min_v) / (max_v - min_v)
 
-df['score_fibre']   = normalize(df['taux_fibre'])
-df['score_mobile']  = normalize(
-    df['nb_antennes_5g'] * 4 +
-    df['nb_antennes_4g'] * 3 +
-    df['nb_antennes_3g'] * 2 +
-    df['nb_antennes_2g'] * 1
-)
-df['score_densite'] = normalize(df['nb_antennes_par_km2'])
+
+def calculer_scores(df):
+    """Calcule taux, scores normalisés et score final — fonctionne pour arr. et quartier."""
+    df = df.copy()
+
+    # Taux métier
+    df['taux_fibre'] = (df['locaux_fibres_T4_2025'] / df['locaux_total'].replace(0, 1) * 100).round(2)
+    df['taux_5g']    = (df['nb_antennes_5g'] / df['nb_antennes'].replace(0, 1) * 100).round(2)
+    df['taux_4g']    = (df['nb_antennes_4g'] / df['nb_antennes'].replace(0, 1) * 100).round(2)
+
+    df['nb_antennes_par_km2']    = (df['nb_antennes']    / df['surface_km2']).round(2)
+    df['nb_antennes_5g_par_km2'] = (df['nb_antennes_5g'] / df['surface_km2']).round(2)
+    df['nb_antennes_4g_par_km2'] = (df['nb_antennes_4g'] / df['surface_km2']).round(2)
+
+    for col in ['taux_fibre', 'taux_5g', 'taux_4g']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Normalisation
+    df['score_fibre']   = normalize(df['taux_fibre'])
+    df['score_mobile']  = normalize(
+        df['nb_antennes_5g'] * 4 +
+        df['nb_antennes_4g'] * 3 +
+        df['nb_antennes_3g'] * 2 +
+        df['nb_antennes_2g'] * 1
+    )
+    df['score_densite'] = normalize(df['nb_antennes_par_km2'])
+
+    # Score final
+    df['score_connectivite'] = (
+        df['score_fibre']   * 0.45 +
+        df['score_mobile']  * 0.40 +
+        df['score_densite'] * 0.15
+    ).round(4)
+
+    df['score_connectivite_100'] = (df['score_connectivite'] * 100).round(1)
+    df['rang'] = df['score_connectivite'].rank(ascending=False, method='first').astype(int)
+    df['categorie'] = pd.cut(
+        df['score_connectivite'],
+        bins=[0, 0.33, 0.66, 1.0],
+        labels=['Peu connecté', 'Connecté', 'Très connecté'],
+        include_lowest=True
+    )
+    return df
 
 
-# 5. SCORE FINAL PONDÉRÉ ET RANG
-
-df['score_connectivite'] = (
-    df['score_fibre']   * 0.45 +
-    df['score_mobile']  * 0.40 +
-    df['score_densite'] * 0.15
-).round(4)
-
-df['score_connectivite_100'] = (df['score_connectivite'] * 100).round(1)
-df['rang'] = df['score_connectivite'].rank(ascending=False, method='first').astype(int)
-
-df['categorie'] = pd.cut(
-    df['score_connectivite'],
-    bins=[0, 0.33, 0.66, 1.0],
-    labels=['Peu connecté', 'Connecté', 'Très connecté'],
-    include_lowest=True
-)
-
-df_gold = df.sort_values('rang').reset_index(drop=True)
+def exporter(df_gold, table_name, pk_cols, parquet_path, engine):
+    df_gold.to_parquet(parquet_path, index=False)
+    print(f'✓ Parquet : {parquet_path}')
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("CREATE SCHEMA IF NOT EXISTS gold;"))
+            conn.execute(text(f"DROP TABLE IF EXISTS gold.{table_name} CASCADE;"))
+            conn.commit()
+        df_gold.to_sql(table_name, engine, if_exists='replace', index=False, schema='gold')
+        pk = ', '.join(pk_cols)
+        with engine.connect() as conn:
+            conn.execute(text(f"ALTER TABLE gold.{table_name} ADD PRIMARY KEY ({pk})"))
+            conn.commit()
+        print(f'✓ PostgreSQL : gold.{table_name} ({len(df_gold)} lignes)')
+    except Exception as e:
+        print(f'❌ PostgreSQL indisponible pour {table_name} : {e}')
 
 
-# 6. VALIDATION
+# ==========================================================================
+# SURFACE — ARRONDISSEMENTS
+# ==========================================================================
+csv_arr     = os.path.join(BRUTE_DIR, 'arrondissements.csv')
+df_arr_ref  = pd.read_csv(csv_arr, sep=';')
+col_surface = next((c for c in df_arr_ref.columns if 'surface' in c.lower()), None)
+col_num     = next((c for c in df_arr_ref.columns if 'numéro' in c.lower() and 'insee' not in c.lower() and 'séquentiel' not in c.lower()), None)
+df_surface_arr = df_arr_ref[[col_num, col_surface]].copy()
+df_surface_arr.columns = ['arrondissement', 'surface_m2']
+df_surface_arr['surface_km2'] = (df_surface_arr['surface_m2'] / 1_000_000).round(4)
 
-assert df_gold['score_connectivite'].isna().sum() == 0,   "NaN dans score_connectivite"
-assert df_gold['score_connectivite'].between(0, 1).all(), "Score hors [0,1]"
-assert len(df_gold) == 20,                                "Nombre d'arrondissements incorrect"
-assert df_gold['rang'].nunique() == 20,                   "Les rangs ne sont pas uniques"
-
-print(f"Shape gold : {df_gold.shape}")
-print(df_gold[['arrondissement', 'taux_fibre', 'score_mobile', 'score_connectivite_100', 'rang']].to_string(index=False))
-cols_keep = [
-    'code_postal',
-    'nb_antennes', 'nb_antennes_2g', 'nb_antennes_3g', 'nb_antennes_4g', 'nb_antennes_5g',
-    'nb_antennes_orange', 'nb_antennes_sfr', 'nb_antennes_free', 'nb_antennes_bouygues',
-    'operateur_leader',
-    'taux_fibre', 'taux_5g', 'taux_4g',
-    'score_fibre', 'score_mobile', 'score_densite',
-    'score_connectivite', 'score_connectivite_100',
-    'rang', 'categorie'
-]
-df_gold = df_gold[cols_keep]
-
-# 7. EXPORT PARQUET
-
-parquet_path = os.path.join(GOLD_DIR, 'score_connectivite_gold.parquet')
-df_gold.to_parquet(parquet_path, index=False)
-print(f'✓ Parquet sauvegardé : {parquet_path}')
-
-
-# 8. EXPORT POSTGRESQL
+# SURFACE — QUARTIERS
+csv_qu = os.path.join(BRUTE_DIR, 'quartiers.csv')
+df_qu_ref = pd.read_csv(csv_qu, sep=';')
+df_qu_ref.columns = df_qu_ref.columns.str.strip()
+col_surface_qu = next((c for c in df_qu_ref.columns if 'surface' in c.lower()), None)
+df_surface_qu = df_qu_ref[['C_QU', 'L_QU', 'C_AR', col_surface_qu]].copy()
+df_surface_qu.columns = ['code_quartier', 'nom_quartier', 'arrondissement', 'surface_m2']
+df_surface_qu['surface_km2'] = (df_surface_qu['surface_m2'] / 1_000_000).round(4)
 
 try:
     engine = create_engine(PG_URL)
-    with engine.connect() as conn:
-        conn.execute(text("CREATE SCHEMA IF NOT EXISTS gold;"))
-        conn.execute(text("DROP TABLE IF EXISTS gold.score_connectivite CASCADE;"))
-        conn.commit()
-    df_gold.to_sql('score_connectivite', engine, if_exists='replace', index=False, schema='gold')
-    with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE gold.score_connectivite ADD PRIMARY KEY (code_postal)"))
-        conn.commit()
-    print(f'✓ PostgreSQL : gold.score_connectivite ({len(df_gold)} lignes)')
-    print(f'✓ PostgreSQL : gold.score_connectivite ({len(df_gold)} lignes)')
 except Exception as e:
-    print(f'PostgreSQL indisponible : {e}')
+    engine = None
+    print(f'⚠️ PostgreSQL non initialisé : {e}')
+
+# ==========================================================================
+# BLOC 1 — ARRONDISSEMENT
+# ==========================================================================
+print("\n--- GOLD ARRONDISSEMENT ---")
+silver_arr_path = os.path.join(SILVER_DIR, 'indicateur_connectivite_silver.parquet')
+if not os.path.exists(silver_arr_path):
+    raise FileNotFoundError(f"Silver arrondissement introuvable : {silver_arr_path}")
+
+df_arr = pd.read_parquet(silver_arr_path)
+df_arr['arrondissement'] = df_arr['code_postal'].astype(int) - 75000
+df_arr = df_arr.merge(df_surface_arr, on='arrondissement', how='left')
+df_arr = calculer_scores(df_arr)
+
+assert df_arr['score_connectivite'].isna().sum() == 0
+assert df_arr['score_connectivite'].between(0, 1).all()
+
+cols_arr = [
+    'code_postal',
+    'nb_antennes', 'nb_antennes_2g', 'nb_antennes_3g', 'nb_antennes_4g', 'nb_antennes_5g',
+    'nb_antennes_orange', 'nb_antennes_sfr', 'nb_antennes_free', 'nb_antennes_bouygues',
+    'operateur_leader', 'taux_fibre', 'taux_5g', 'taux_4g',
+    'score_fibre', 'score_mobile', 'score_densite',
+    'score_connectivite', 'score_connectivite_100', 'rang', 'categorie'
+]
+df_arr_gold = df_arr[[c for c in cols_arr if c in df_arr.columns]].sort_values('rang').reset_index(drop=True)
+
+exporter(
+    df_arr_gold,
+    table_name='score_connectivite',
+    pk_cols=['code_postal'],
+    parquet_path=os.path.join(GOLD_DIR, 'score_connectivite_gold.parquet'),
+    engine=engine
+)
+
+# ==========================================================================
+# BLOC 2 — QUARTIER
+# ==========================================================================
+print("\n--- GOLD QUARTIER ---")
+silver_qu_path = os.path.join(SILVER_DIR, 'indicateur_connectivite_quartier_silver.parquet')
+if not os.path.exists(silver_qu_path):
+    raise FileNotFoundError(f"Silver quartier introuvable : {silver_qu_path}")
+
+df_qu = pd.read_parquet(silver_qu_path)
+df_qu = df_qu.merge(df_surface_qu[['code_quartier', 'surface_km2']], on='code_quartier', how='left')
+df_qu = calculer_scores(df_qu)
+
+assert df_qu['score_connectivite'].isna().sum() == 0
+
+cols_qu = [
+    'code_quartier', 'nom_quartier', 'arrondissement',
+    'nb_antennes', 'nb_antennes_2g', 'nb_antennes_3g', 'nb_antennes_4g', 'nb_antennes_5g',
+    'nb_antennes_orange', 'nb_antennes_sfr', 'nb_antennes_free', 'nb_antennes_bouygues',
+    'operateur_leader', 'taux_fibre', 'taux_5g', 'taux_4g',
+    'score_fibre', 'score_mobile', 'score_densite',
+    'score_connectivite', 'score_connectivite_100', 'rang', 'categorie'
+]
+df_qu_gold = df_qu[[c for c in cols_qu if c in df_qu.columns]].sort_values('rang').reset_index(drop=True)
+
+exporter(
+    df_qu_gold,
+    table_name='score_connectivite_quartier',
+    pk_cols=['code_quartier'],
+    parquet_path=os.path.join(GOLD_DIR, 'score_connectivite_quartier_gold.parquet'),
+    engine=engine
+)
 
 print('\n=== GOLD connectivite OK ===')

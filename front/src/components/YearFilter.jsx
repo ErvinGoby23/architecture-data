@@ -9,7 +9,7 @@ export default function YearFilter({ year, onChange }) {
           <button
             key={y}
             className={`preset-btn ${year === y ? 'active' : ''}`}
-            onClick={() => onChange(y === year ? null : y)}
+            onClick={() => onChange(y)}
           >
             {y}
           </button>
