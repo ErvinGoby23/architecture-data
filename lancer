@@ -22,4 +22,4 @@ POSTGRES_PASSWORD=test123
 POSTGRES_DB=postgres
 
 
-docker exec -it postgres-primary psql -U postgres -c "\dt gold.*"
+docker exec -it postgres-urban psql -U postgres -c "\dt gold.*"

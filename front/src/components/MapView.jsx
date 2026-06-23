@@ -260,42 +260,62 @@ export default function MapView({
   }, [scores, scoreKey, activeIndicateur?.id])
 
   // Couleurs + hauteurs 3D — zonesLoaded garantit que le layer existe
-  useEffect(() => {
-    if (!mapReady || !map.current || !scores.length || !scoreKey) return
-    if (!map.current.getLayer('zone-3d')) return
+// Remplacez le useEffect de calcul des couleurs/hauteurs par celui-ci :
+useEffect(() => {
+  if (!mapReady || !map.current || !scores.length || !scoreKey) return
+  if (!map.current.getLayer('zone-3d')) return
 
-    const isQuartier = granularite === 'quartier'
-    const colorExpr  = ['match', ['get', '_id_zone']]
-    const heightExpr = ['match', ['get', '_id_zone']]
-    const darkColor  = activeIndicateur?.darkColor ?? '#0d1117'
-    const targetId   = selected !== null ? parseInt(selected) : null
+  const isQuartier = granularite === 'quartier'
+  const colorExpr  = ['match', ['get', '_id_zone']]
+  const heightExpr = ['match', ['get', '_id_zone']]
+  const darkColor  = activeIndicateur?.darkColor ?? '#0d1117'
+  const targetId   = selected !== null ? parseInt(selected) : null
 
-    const scoresUniques = scores.filter((s, i, arr) =>
-      arr.findIndex(x =>
-        (x.code_quartier ?? x.arrondissement ?? (x.code_postal - 75000)) ===
-        (s.code_quartier ?? s.arrondissement ?? (s.code_postal - 75000))
-      ) === i
-    )
+  // Utilisation d'un Set pour garantir des ID strictement uniques pour le match MapLibre
+  const idsTraites = new Set()
+  let aAjouteDesBranches = false
 
-    scoresUniques.forEach(s => {
-      const id = isQuartier ? parseInt(s.code_quartier) : getArrNum(s)
-      if (id === null || isNaN(id)) return
-      const normalized = (s[scoreKey] ?? 0) / 100
-      let baseColor = interpolateColor(darkColor, activeColor, normalized)
-      if (targetId !== null && id !== targetId) {
-        baseColor = interpolateColor('#1a2634', baseColor, 0.3)
-      }
-      colorExpr.push(id, baseColor)
-      heightExpr.push(id, is3D ? Math.round(200 + normalized * 1200) : 0)
-    })
-    colorExpr.push(darkColor)
-    heightExpr.push(0)
+  scores.forEach(s => {
+    const id = isQuartier ? parseInt(s.code_quartier) : getArrNum(s)
+    
+    // Sécurité : Si l'ID est invalide ou a déjà été ajouté, on passe
+    if (id === null || isNaN(id) || idsTraites.has(id)) return
+    
+    idsTraites.add(id)
+    aAjouteDesBranches = true
 
+    const normalized = (s[scoreKey] ?? 0) / 100
+    let baseColor = interpolateColor(darkColor, activeColor, normalized)
+    
+    if (targetId !== null && id !== targetId) {
+      baseColor = interpolateColor('#1a2634', baseColor, 0.3)
+    }
+    
+    colorExpr.push(id, baseColor)
+    heightExpr.push(id, is3D ? Math.round(200 + normalized * 1200) : 0)
+  })
+
+  // S'assurer qu'au moins une branche valide a été ajoutée pour éviter l'erreur "Expected at least 4 arguments"
+  if (!aAjouteDesBranches) {
+    // Si aucun score valide, on applique la couleur par défaut directement sans l'expression 'match'
+    map.current.setPaintProperty('zone-3d', 'fill-extrusion-color', darkColor)
+    map.current.setPaintProperty('zone-3d', 'fill-extrusion-height', 0)
+    return
+  }
+
+  // Ajout de la valeur par défaut requise à la fin du match
+  colorExpr.push(darkColor)
+  heightExpr.push(0)
+
+  // Application sécurisée à MapLibre
+  try {
     map.current.setPaintProperty('zone-3d', 'fill-extrusion-color', colorExpr)
     map.current.setPaintProperty('zone-3d', 'fill-extrusion-height', heightExpr)
     map.current.setPaintProperty('zone-3d', 'fill-extrusion-opacity', is3D ? 0.75 : 0.85)
-  }, [scores, scoreKey, activeColor, activeIndicateur?.darkColor, mapReady, is3D, selected, granularite, zonesLoaded])
-
+  } catch (error) {
+    console.error("Erreur lors de l'application du style MapLibre:", error)
+  }
+}, [scores, scoreKey, activeColor, activeIndicateur?.darkColor, mapReady, is3D, selected, granularite, zonesLoaded])
   // Fetch points MongoDB au clic
   useEffect(() => {
     clearMarkers()
