@@ -1,6 +1,6 @@
 prefect server start
 uvicorn main:app --reload --port 8000   
-npm run dev
+npm run dev / node node_modules/vite/bin/vite.js
 python pipeline_orchestrator.py / python -c "from pipeline_orchestrator import main_pipeline; main_pipeline()"
 
 docker compose down -v
@@ -36,3 +36,4 @@ Bronze >>> EDA >>> silver (normalisation et postgress, versioning, mongodb) >>> 
 
 front: API >>> indicateur >>> map view >>> sidebar >>>
 docker exec -it postgres-urban psql -U postgres -c "\dt gold.*"
+et aussi est ce que les scoree glods corresponds bien aux arrondissment soi sur a 100% 

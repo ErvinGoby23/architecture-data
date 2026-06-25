@@ -30,6 +30,16 @@ def run_script(path: str, arg: str = None) -> float:
 def file_size_mb(path: str) -> float:
     return round(os.path.getsize(path) / 1_000_000, 2) if os.path.exists(path) else 0
 
+def folder_size_mb(path: str) -> float:
+    if not os.path.exists(path):
+        return 0
+    total = sum(
+        os.path.getsize(os.path.join(root, f))
+        for root, _, files in os.walk(path)
+        for f in files if f.endswith('.parquet')
+    )
+    return round(total / 1_000_000, 2)
+
 def check_pg_primary(logger) -> bool:
     try:
         from sqlalchemy import create_engine, text
@@ -213,7 +223,7 @@ def run_silver_commerces(date_str: str):
     logger = get_run_logger()
     logger.info(f"Silver commerces — {date_str}")
     script = os.path.join(ROOT_DIR, "silver", "indicateur4", "silver_comerce.py")
-    duration = run_script(script)  # pas de date : fichier statique
+    duration = run_script(script, date_str)
     logger.info(f"Termine en {duration}s")
     return duration
 
@@ -222,7 +232,7 @@ def run_silver_commissariats(date_str: str):
     logger = get_run_logger()
     logger.info(f"Silver commissariats — {date_str}")
     script = os.path.join(ROOT_DIR, "silver", "indicateur4", "silver_commissariats.py")
-    duration = run_script(script)  # pas de date : fichier statique
+    duration = run_script(script, date_str)
     logger.info(f"Termine en {duration}s")
     return duration
 
@@ -264,6 +274,66 @@ def run_gold_services(date_str: str):
         return duration
     except Exception as e:
         logger.warning(f"Gold services — PostgreSQL primary indisponible : {e}")
+        logger.warning("Fallback actif : Parquet Gold reste la source canonique")
+        return None
+
+# ──────────────────────────────────────────────
+# SILVER & GOLD — INDICATEUR 5 (Logement)
+# ──────────────────────────────────────────────
+@task(name="Silver - DVF", retries=1)
+def run_silver_dvf(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Silver DVF (transactions immobilieres) — {date_str}")
+    script = os.path.join(ROOT_DIR, "silver", "indicateur5", "silver_dvf.py")
+    duration = run_script(script, date_str)
+    logger.info(f"Termine en {duration}s")
+    return duration
+
+@task(name="Silver - Logements sociaux", retries=1)
+def run_silver_logements_sociaux(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Silver logements sociaux — {date_str}")
+    script = os.path.join(ROOT_DIR, "silver", "indicateur5", "silver_logements_sociaux.py")
+    duration = run_script(script, date_str)
+    logger.info(f"Termine en {duration}s")
+    return duration
+
+@task(name="Silver - FILOSOFI", retries=1)
+def run_silver_filosofi(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Silver FILOSOFI (revenus & pauvrete) — {date_str}")
+    script = os.path.join(ROOT_DIR, "silver", "indicateur5", "silver_filosofi.py")
+    duration = run_script(script, date_str)
+    logger.info(f"Termine en {duration}s")
+    return duration
+
+@task(name="Silver - Fusion indicateur 5", retries=1)
+def run_silver_fusion_ind5(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Fusion Silver ind5 (logement) — {date_str}")
+    script = os.path.join(ROOT_DIR, "silver", "indicateur5", "fusion_logement.py")
+    try:
+        duration = run_script(script, date_str)
+        logger.info(f"Fusion ind5 OK en {duration}s")
+        return duration
+    except Exception as e:
+        logger.warning(f"Fusion ind5 — erreur : {e}")
+        logger.warning("Fallback actif : Parquet reste la source canonique")
+        return None
+
+@task(name="Gold - Score accessibilite logement", retries=1)
+def run_gold_accessibilite(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Gold score accessibilite logement — {date_str}")
+    logger.info("Cible ecriture : PostgreSQL primary (5432)")
+    script = os.path.join(ROOT_DIR, "gold", "indicateur5", "gold_score_accessibilite.py")
+    try:
+        duration = run_script(script, date_str)
+        logger.info(f"Gold accessibilite OK en {duration}s")
+        logger.info("Resilience : Parquet Gold OK — PostgreSQL primary ecrit, replica (5433) synchronise via WAL")
+        return duration
+    except Exception as e:
+        logger.warning(f"Gold accessibilite — PostgreSQL primary indisponible : {e}")
         logger.warning("Fallback actif : Parquet Gold reste la source canonique")
         return None
 
@@ -323,7 +393,7 @@ def main_pipeline():
         perf_ant    = future_ant.result()
         logger.info("Bronze OK")
 
-        # ── SILVER ind1 + ind2 + ind4 en parallèle ───────────────────────
+        # ── SILVER ind1 + ind2 + ind4 + ind5 en parallèle ───────────────
         future_arrets   = run_silver_arrets.submit(current_date)
         future_taxi     = run_silver_taxi.submit(current_date)
         future_stat_s   = run_silver_stationnement.submit(current_date)
@@ -332,6 +402,9 @@ def main_pipeline():
         future_commer   = run_silver_commerces.submit(current_date)
         future_commis   = run_silver_commissariats.submit(current_date)
         future_ecoles   = run_silver_ecoles.submit(current_date)
+        future_dvf      = run_silver_dvf.submit(current_date)
+        future_ls       = run_silver_logements_sociaux.submit(current_date)
+        future_filo     = run_silver_filosofi.submit(current_date)
 
         future_arrets.result()
         future_taxi.result()
@@ -341,24 +414,31 @@ def main_pipeline():
         future_commer.result()
         future_commis.result()
         future_ecoles.result()
+        future_dvf.result()
+        future_ls.result()
+        future_filo.result()
         logger.info("Silver OK")
 
         # ── FUSIONS en parallèle ─────────────────────────────────────────
         future_fusion1 = run_silver_fusion_ind1.submit(current_date)
         future_fusion2 = run_silver_fusion_ind2.submit(current_date)
         future_fusion4 = run_silver_fusion_ind4.submit(current_date)
+        future_fusion5 = run_silver_fusion_ind5.submit(current_date)
         future_fusion1.result()
         future_fusion2.result()
         future_fusion4.result()
+        future_fusion5.result()
         logger.info("Fusions OK")
 
         # ── GOLD en parallèle ────────────────────────────────────────────
         future_mob      = run_gold_mobilite.submit(current_date)
         future_conn     = run_gold_connectivite.submit(current_date)
         future_services = run_gold_services.submit(current_date)
+        future_access   = run_gold_accessibilite.submit(current_date)
         future_mob.result()
         future_conn.result()
         future_services.result()
+        future_access.result()
         logger.info("Gold OK")
 
         # ── LOAD TEST ────────────────────────────────────────────────────
@@ -369,27 +449,44 @@ def main_pipeline():
         total_duration = round(time.time() - global_start, 1)
         bronze_skipped = perf_stat.get("skipped", False) or perf_ant.get("skipped", False)
 
-        vol_bronze = round(perf_stat["size_mb"] + perf_ant["size_mb"], 2)
-        silver_files = [
-            os.path.join(ROOT_DIR, "silver", "indicateur1", "nettoyage-indicateur1", current_date, "indicateur_mobilite_silver.parquet"),
-            os.path.join(ROOT_DIR, "silver", "indicateur2", "nettoyage-indicateur2", current_date, "indicateur_connectivite_silver.parquet"),
-            os.path.join(ROOT_DIR, "silver", "indicateur4", "indicateur_services", "indicateur_services_quotidien.parquet"),
-        ]
-        vol_silver = round(sum(file_size_mb(f) for f in silver_files), 2)
-        gold_files = [
-            os.path.join(ROOT_DIR, "gold", "indicateur1", current_date, "score_mobilite_gold.parquet"),
-            os.path.join(ROOT_DIR, "gold", "indicateur2", current_date, "score_connectivite_gold.parquet"),
-            os.path.join(ROOT_DIR, "gold", "indicateur4", current_date, "score_services_gold.parquet"),
-        ]
-        vol_gold = round(sum(file_size_mb(f) for f in gold_files), 2)
+        vol_bronze_stat = perf_stat["size_mb"]
+        vol_bronze_ant  = perf_ant["size_mb"]
+        vol_bronze      = round(vol_bronze_stat + vol_bronze_ant, 2)
+
+        vol_silver_ind1 = folder_size_mb(os.path.join(ROOT_DIR, "silver", "indicateur1", "nettoyage-indicateur1", current_date))
+        vol_silver_ind2 = folder_size_mb(os.path.join(ROOT_DIR, "silver", "indicateur2", "nettoyage-indicateur2", current_date))
+        vol_silver_ind4 = folder_size_mb(os.path.join(ROOT_DIR, "silver", "indicateur4", "nettoyage-indicateur4", current_date))
+        vol_silver_ind5 = folder_size_mb(os.path.join(ROOT_DIR, "silver", "indicateur5", current_date))
+        vol_silver      = round(vol_silver_ind1 + vol_silver_ind2 + vol_silver_ind4 + vol_silver_ind5, 2)
+
+        vol_gold_ind1 = folder_size_mb(os.path.join(ROOT_DIR, "gold", "indicateur1", current_date))
+        vol_gold_ind2 = folder_size_mb(os.path.join(ROOT_DIR, "gold", "indicateur2", current_date))
+        vol_gold_ind4 = folder_size_mb(os.path.join(ROOT_DIR, "gold", "indicateur4", current_date))
+        vol_gold_ind5 = folder_size_mb(os.path.join(ROOT_DIR, "gold", "indicateur5", current_date))
+        vol_gold      = round(vol_gold_ind1 + vol_gold_ind2 + vol_gold_ind4 + vol_gold_ind5, 2)
+
         total_volume = round(vol_bronze + vol_silver + vol_gold, 2)
         debit_mbs    = round(total_volume / total_duration, 2) if total_duration > 0 else 0
 
         logger.info("=== RAPPORT DE PERFORMANCE (C2.4) ===")
         logger.info(f"Temps total d'execution  : {total_duration}s")
-        logger.info(f"Volume Bronze  (APIs)    : {vol_bronze} MB")
-        logger.info(f"Volume Silver  (Parquet) : {vol_silver} MB")
-        logger.info(f"Volume Gold    (Parquet) : {vol_gold} MB")
+        logger.info(f"--- Bronze (APIs) ---")
+        logger.info(f"  Stationnement          : {vol_bronze_stat} MB")
+        logger.info(f"  Antennes relais        : {vol_bronze_ant} MB")
+        logger.info(f"  Total Bronze           : {vol_bronze} MB")
+        logger.info(f"--- Silver (Parquet) ---")
+        logger.info(f"  Indicateur 1 Mobilite  : {vol_silver_ind1} MB")
+        logger.info(f"  Indicateur 2 Connectivite : {vol_silver_ind2} MB")
+        logger.info(f"  Indicateur 4 Services  : {vol_silver_ind4} MB")
+        logger.info(f"  Indicateur 5 Logement  : {vol_silver_ind5} MB")
+        logger.info(f"  Total Silver           : {vol_silver} MB")
+        logger.info(f"--- Gold (Parquet) ---")
+        logger.info(f"  Indicateur 1 Mobilite  : {vol_gold_ind1} MB")
+        logger.info(f"  Indicateur 2 Connectivite : {vol_gold_ind2} MB")
+        logger.info(f"  Indicateur 4 Services  : {vol_gold_ind4} MB")
+        logger.info(f"  Indicateur 5 Logement  : {vol_gold_ind5} MB")
+        logger.info(f"  Total Gold             : {vol_gold} MB")
+        logger.info(f"--- Synthese ---")
         logger.info(f"Volume total pipeline    : {total_volume} MB")
         logger.info(f"Debit moyen              : {debit_mbs} MB/s")
         logger.info(f"Comportement ce jour     : {'SKIP FETCH' if bronze_skipped else 'FETCH OK'}")

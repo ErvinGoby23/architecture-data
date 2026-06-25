@@ -2,7 +2,7 @@
 load_test_postgresql.py — Tests de charge · Base relationnelle PostgreSQL
 Urban Data Explorer · C1.1 Validation performance
 
-Cible : tables gold.score_mobilite et gold.score_connectivite
+Cible : tables gold (mobilite, connectivite, services) + quartiers
 Methode : requetes simultanees via ThreadPoolExecutor
 Output : logs console + fichier load_test_results.json
 """
@@ -23,19 +23,18 @@ PG_URL_REPLICA = os.getenv('PG_URL_REPLICA')
 NOW            = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 QUERIES = {
-    "select_all_mobilite":          "SELECT * FROM gold.score_mobilite ORDER BY rang",
-    "select_all_connectivite":      "SELECT * FROM gold.score_connectivite ORDER BY rang",
-    "filter_by_code_postal":        "SELECT * FROM gold.score_mobilite WHERE code_postal = 75001",
-    "top5_mobilite":                "SELECT code_postal, score_mobilite_100, rang FROM gold.score_mobilite ORDER BY rang LIMIT 5",
-    "top5_connectivite":            "SELECT code_postal, score_connectivite_100, rang FROM gold.score_connectivite ORDER BY rang LIMIT 5",
-    "select_all_silver_mobilite":   "SELECT * FROM silver.indicateur_mobilite ORDER BY code_postal",
-    "select_all_silver_connectivite": "SELECT * FROM silver.indicateur_connectivite ORDER BY code_postal",
-    "join_indicateurs": """
-        SELECT m.code_postal, m.score_mobilite_100, c.score_connectivite_100
-        FROM gold.score_mobilite m
-        JOIN gold.score_connectivite c ON m.code_postal = c.code_postal
-        ORDER BY m.code_postal
-    """,
+    "select_all_mobilite":              "SELECT * FROM gold.score_mobilite_arrondissement ORDER BY rang",
+    "select_all_mobilite_quartier":     "SELECT * FROM gold.score_mobilite_quartier ORDER BY rang",
+    "select_all_connectivite":          "SELECT * FROM gold.score_connectivite ORDER BY rang",
+    "select_all_connectivite_quartier": "SELECT * FROM gold.score_connectivite_quartier ORDER BY rang",
+    "select_all_services":              "SELECT * FROM gold.score_services ORDER BY rang",
+    "select_all_services_quartier":     "SELECT * FROM gold.score_services_quartier ORDER BY rang",
+    "filter_by_arrondissement":         "SELECT * FROM gold.score_mobilite_arrondissement WHERE arrondissement = 1",
+    "top5_mobilite":                    "SELECT arrondissement, score_mobilite_100, rang FROM gold.score_mobilite_arrondissement ORDER BY rang LIMIT 5",
+    "top5_connectivite":                "SELECT code_postal, score_connectivite_100, rang FROM gold.score_connectivite ORDER BY rang LIMIT 5",
+    "top5_services":                    "SELECT code_postal, score_services_100, rang FROM gold.score_services ORDER BY rang LIMIT 5",
+    "select_all_silver_mobilite":       "SELECT * FROM silver.indicateur_mobilite_arrondissement ORDER BY arrondissement",
+    "select_all_silver_connectivite":   "SELECT * FROM silver.indicateur_connectivite ORDER BY code_postal",
 }
 
 def run_query(query_name: str, sql: str, engine) -> dict:
@@ -57,7 +56,7 @@ def test_latence(engine, label: str):
         r = run_query(name, sql, engine)
         results.append(r)
         status = "OK" if r["status"] == "OK" else "ERREUR"
-        print(f"  [{status}] {name:<40} {r['duration_ms']:>8.2f} ms  ({r['rows']} lignes)")
+        print(f"  [{status}] {name:<45} {r['duration_ms']:>8.2f} ms  ({r['rows']} lignes)")
     return results
 
 def test_charge(engine, nb_workers: int, nb_iterations: int, label: str):
@@ -101,9 +100,9 @@ def run_tests_sur_engine(engine, label: str) -> dict:
     print(f"\n{'='*60}")
     print(f"  TESTS SUR : {label}")
     print(f"{'='*60}")
-    latence  = test_latence(engine, label)
-    charge10 = test_charge(engine, nb_workers=10,  nb_iterations=3, label=label)
-    charge50 = test_charge(engine, nb_workers=50,  nb_iterations=2, label=label)
+    latence   = test_latence(engine, label)
+    charge10  = test_charge(engine, nb_workers=10,  nb_iterations=3, label=label)
+    charge50  = test_charge(engine, nb_workers=50,  nb_iterations=2, label=label)
     charge100 = test_charge(engine, nb_workers=100, nb_iterations=1, label=label)
     return {
         "test_latence_base":       latence,
@@ -119,9 +118,18 @@ if __name__ == "__main__":
     if not PG_URL:
         raise EnvironmentError("PG_URL non defini dans le .env")
 
-    output = {"meta": {"date": NOW, "tables_testees": ["gold.score_mobilite", "gold.score_connectivite"]}}
+    output = {
+        "meta": {
+            "date": NOW,
+            "tables_testees": [
+                "gold.score_mobilite_arrondissement", "gold.score_mobilite_quartier",
+                "gold.score_connectivite", "gold.score_connectivite_quartier",
+                "gold.score_services", "gold.score_services_quartier",
+                "silver.indicateur_mobilite_arrondissement", "silver.indicateur_connectivite",
+            ]
+        }
+    }
 
-    # --- PRIMARY ---
     print("\nConnexion au PRIMARY (5432)...")
     try:
         engine_primary = create_engine(PG_URL, pool_size=20, max_overflow=10)
@@ -129,13 +137,12 @@ if __name__ == "__main__":
             conn.execute(text("SELECT 1"))
         print("PRIMARY disponible")
         output["primary"] = run_tests_sur_engine(engine_primary, "PostgreSQL PRIMARY (5432)")
-        output["meta"]["primary_url"] = PG_URL.split("@")[-1]
+        output["meta"]["primary_url"]    = PG_URL.split("@")[-1]
         output["meta"]["primary_status"] = "OK"
     except Exception as e:
         print(f"PRIMARY indisponible : {e}")
         output["meta"]["primary_status"] = "INDISPONIBLE"
 
-    # --- REPLICA ---
     if PG_URL_REPLICA:
         print("\nConnexion au REPLICA (5433)...")
         try:
@@ -144,7 +151,7 @@ if __name__ == "__main__":
                 conn.execute(text("SELECT 1"))
             print("REPLICA disponible")
             output["replica"] = run_tests_sur_engine(engine_replica, "PostgreSQL REPLICA (5433)")
-            output["meta"]["replica_url"] = PG_URL_REPLICA.split("@")[-1]
+            output["meta"]["replica_url"]    = PG_URL_REPLICA.split("@")[-1]
             output["meta"]["replica_status"] = "OK"
         except Exception as e:
             print(f"REPLICA indisponible : {e}")
@@ -153,7 +160,6 @@ if __name__ == "__main__":
         print("\nPG_URL_REPLICA non defini — test replica ignore")
         output["meta"]["replica_status"] = "NON CONFIGURE"
 
-    # --- EXPORT JSON ---
     date_folder = datetime.now().strftime('%Y-%m-%d')
     hour_folder = datetime.now().strftime('%H-%M-%S')
     output_dir  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results', date_folder, hour_folder)
