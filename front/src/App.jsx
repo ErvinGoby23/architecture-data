@@ -115,6 +115,7 @@ export default function App() {
         <div style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
           <MapView
             scores={scores}
+            year={year}
             scoreKey={activeIndicateur.scoreKey}
             activeColor={activeIndicateur.color}
             activeIndicateur={activeIndicateur}

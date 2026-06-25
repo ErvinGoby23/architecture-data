@@ -435,11 +435,11 @@ export default function MapView({
 
 function getHeatColor(normalized) {
   const colors = [
-    { t: 0.0,  hex: '#1a9850' },
-    { t: 0.25, hex: '#91cf60' },
+    { t: 0.0,  hex: '#d73027' },  
+    { t: 0.25, hex: '#fc8d59' },
     { t: 0.5,  hex: '#fee08b' },
-    { t: 0.75, hex: '#fc8d59' },
-    { t: 1.0,  hex: '#d73027' },
+    { t: 0.75, hex: '#91cf60' },
+    { t: 1.0,  hex: '#1a9850' },  
   ]
   for (let i = 0; i < colors.length - 1; i++) {
     const a = colors[i], b = colors[i + 1]
