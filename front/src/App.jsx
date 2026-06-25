@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import MapView  from './components/MapView'
 import Sidebar  from './components/Sidebar'
 import { INDICATEURS } from './indicateurs/index'
-import { fetchScoresMobilite, fetchScoresConnectivite, fetchScoresServices, fetchScoresLogement } from './api/index'
+import { fetchScoresMobilite, fetchScoresConnectivite, fetchScoresServices, fetchScoresVivabilite, fetchScoresLogement } from './api/index'
 import './index.css'
 import RankingPanel from './components/RankingPanel'
 import ComparePanel from './components/ComparePanel'
@@ -12,6 +12,7 @@ const SCORES_FETCHERS = {
   mobilite:     fetchScoresMobilite,
   connectivite: fetchScoresConnectivite,
   services:     fetchScoresServices,
+  vivabilite:   fetchScoresVivabilite,
   logement:     fetchScoresLogement,
 }
 

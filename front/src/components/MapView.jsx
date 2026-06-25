@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
-import { fetchPointsMobilite, fetchPointsConnectivite, fetchPointsServices, fetchPointsLogement } from '../api/index'
+import { fetchPointsMobilite, fetchPointsConnectivite, fetchPointsServices, fetchPointsVivabilite, fetchPointsLogement } from '../api/index'
 
 // année courante partagée avec le wrapper logement (mise à jour par un effet)
 let _currentYear = null
@@ -9,6 +9,7 @@ const POINTS_FETCHERS = {
   mobilite:     fetchPointsMobilite,
   connectivite: fetchPointsConnectivite,
   services:     fetchPointsServices,
+  vivabilite:   fetchPointsVivabilite,
   // logement : signature adaptée + année active + (les 2 types de points sont renvoyés)
   logement: ({ granularite, arrondissement, code_quartier }) =>
     fetchPointsLogement({

@@ -8,7 +8,7 @@ from slowapi.errors import RateLimitExceeded
 from dependencies import limiter
 
 # 1. AJOUTER L'IMPORT DU NOUVEAU ROUTEUR ICI
-from routers import mobilite, connectivite, services, logement
+from routers import mobilite, connectivite, services, vivabilite, logement
 
 app = FastAPI(
     title="Urban Data Explorer API",
@@ -39,7 +39,9 @@ app.add_middleware(
 
 app.include_router(mobilite.router)
 app.include_router(connectivite.router)
+app.include_router(vivabilite.router)
 app.include_router(services.router)
+app.include_router(logement.router)
 
 # 2. AJOUTER LE ROUTEUR À L'APPLICATION ICI
 app.include_router(logement.router)
