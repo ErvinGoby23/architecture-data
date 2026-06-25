@@ -140,8 +140,9 @@ export default function MapView({
   const mapContainer    = useRef(null)
   const map             = useRef(null)
   const popup           = useRef(null)
-  const markersByTypeId = useRef({})
-  const allPointsCache  = useRef({})
+  const allPointsCache    = useRef({})
+  const zonesGeoJSONCache = useRef({})  // cache GeoJSON zones (évite re-fetch au switch granularité)
+  const taggedFeaturesRef  = useRef([])  // features courantes taguées (pour mise à jour visibilité)
   const [mapReady, setMapReady]       = useState(false)
   const [zonesLoaded, setZonesLoaded] = useState(0)
 
@@ -158,9 +159,12 @@ export default function MapView({
   const selectedRef         = useRef(selected)
   useEffect(() => { selectedRef.current = selected }, [selected])
 
+  // ── Points GPU : remplace les markers DOM ──────────────────────────────────
   const clearMarkers = () => {
-    Object.values(markersByTypeId.current).flat().forEach(m => { try { m.remove() } catch (_) {} })
-    markersByTypeId.current = {}
+    taggedFeaturesRef.current = []
+    if (!map.current) return
+    if (map.current.getLayer('points-circle')) map.current.removeLayer('points-circle')
+    if (map.current.getSource('points'))       map.current.removeSource('points')
   }
 
   const showMarkersForSelected = (selectedId, gran) => {
@@ -171,6 +175,7 @@ export default function MapView({
     const geojson  = allPointsCache.current[cacheKey]
     if (!geojson?.features) return
 
+    // Même filtre spatial qu'avant
     const filtered = geojson.features.filter(f => {
       const p = f.properties
       if (gran === 'quartier')
@@ -178,26 +183,43 @@ export default function MapView({
       return parseInt(p.code_postal) === 75000 + parseInt(selectedId) ||
              parseInt(p.arrondissement) === parseInt(selectedId)
     })
+    if (!filtered.length) return
 
+    // Même filtre type/mode qu'avant — on tague chaque feature avec son pointType id
+    const visibleIds = new Set(visibleTypesRef.current)
+    const tagged = []
     ind.pointTypes.forEach(pointType => {
-      const matching = filtered.filter(f => {
-        const props = f.properties
-        if (props.type !== pointType.mongoType) return false
-        if (pointType.modeFilter && props.mode_nom !== pointType.modeFilter) return false
-        return true
-      })
-      if (!matching.length) return
-      const isVisible = visibleTypesRef.current.includes(pointType.id)
-      markersByTypeId.current[pointType.id] = matching.map(f => {
-        const [lng, lat] = f.geometry.coordinates
-        const el = document.createElement('div')
-        el.style.cssText = `
-          width: 10px; height: 10px; border-radius: 50%;
-          background: ${pointType.color}; border: 1.5px solid #fff;
-          display: ${isVisible ? 'block' : 'none'};
-        `
-        return new maplibregl.Marker({ element: el }).setLngLat([lng, lat]).addTo(map.current)
-      })
+      filtered
+        .filter(f => {
+          const props = f.properties
+          if (props.type !== pointType.mongoType) return false
+          if (pointType.modeFilter && props.mode_nom !== pointType.modeFilter) return false
+          return true
+        })
+        .forEach(f => tagged.push({
+          ...f,
+          properties: { ...f.properties, _pt_id: pointType.id, _pt_color: pointType.color,
+                        _visible: visibleIds.has(pointType.id) ? 1 : 0 },
+        }))
+    })
+    if (!tagged.length) return
+
+    const colorMatch = ['match', ['get', '_pt_id']]
+    ind.pointTypes.forEach(pt => colorMatch.push(pt.id, pt.color))
+    colorMatch.push('#cccccc')
+
+    taggedFeaturesRef.current = tagged
+    map.current.addSource('points', { type: 'geojson', data: { type: 'FeatureCollection', features: tagged } })
+    map.current.addLayer({
+      id: 'points-circle', type: 'circle', source: 'points',
+      filter: ['==', ['get', '_visible'], 1],
+      paint: {
+        'circle-color':        colorMatch,
+        'circle-radius':       5,
+        'circle-stroke-width': 1.5,
+        'circle-stroke-color': '#ffffff',
+        'circle-opacity':      0.9,
+      },
     })
   }
 
@@ -214,9 +236,7 @@ export default function MapView({
     map.current.off('mouseleave', 'zone-3d')
     map.current.off('click',     'zone-3d')
 
-    fetch(url)
-      .then(r => r.json())
-      .then(geojson => {
+    const applyGeoJSON = (geojson) => {
         if (!map.current) return
         geojson.features = geojson.features.map(f => {
           const p = f.properties
@@ -229,7 +249,7 @@ export default function MapView({
           return { ...f, properties: { ...p, _id_zone: id_zone, _label_zone: label_zone } }
         })
 
-        map.current.addSource('zones', { type: 'geojson', data: geojson })
+        map.current.addSource('zones', { type: 'geojson', data: geojson, generateId: true })
         map.current.addLayer({ id: 'zone-3d', type: 'fill-extrusion', source: 'zones',
           paint: { 'fill-extrusion-color': '#00d4aa', 'fill-extrusion-height': 100, 'fill-extrusion-base': 0, 'fill-extrusion-opacity': 0.55 }
         })
@@ -274,7 +294,26 @@ export default function MapView({
           }
         })
 
+        // Construit le mapping id_zone -> feature.id une seule fois (querySourceFeatures non fiable après)
+        const idMap = {}
+        geojson.features.forEach((f, idx) => {
+          // generateId assigne des ids séquentiels à partir de 1
+          idMap[f.properties._id_zone] = idx + 1
+        })
+        zoneIdMapRef.current = idMap
         setZonesLoaded(n => n + 1)
+    }
+
+    // Cache : pas de re-fetch si déjà chargé
+    if (zonesGeoJSONCache.current[url]) {
+      applyGeoJSON(zonesGeoJSONCache.current[url])
+      return
+    }
+    fetch(url)
+      .then(r => r.json())
+      .then(geojson => {
+        zonesGeoJSONCache.current[url] = geojson
+        applyGeoJSON(geojson)
       })
       .catch(console.error)
   }
@@ -329,7 +368,6 @@ export default function MapView({
     const colorExpr  = ['match', ['get', '_id_zone']]
     const heightExpr = ['match', ['get', '_id_zone']]
     const darkColor  = activeIndicateur?.darkColor ?? '#0d1117'
-    const targetId   = selected !== null ? parseInt(selected) : null
 
     const idsTraites = new Set()
     let aAjouteDesBranches = false
@@ -339,13 +377,8 @@ export default function MapView({
       if (id === null || isNaN(id) || idsTraites.has(id)) return
       idsTraites.add(id)
       aAjouteDesBranches = true
-
       const normalized = (s[scoreKey] ?? 0) / 100
-      let baseColor = getHeatColor(normalized)
-      if (targetId !== null && id !== targetId) {
-        baseColor = interpolateColor('#1a2634', baseColor, 0.4)
-      }
-      colorExpr.push(id, baseColor)
+      colorExpr.push(id, getHeatColor(normalized))
       heightExpr.push(id, is3D ? Math.round(200 + normalized * 1200) : 0)
     })
 
@@ -354,18 +387,40 @@ export default function MapView({
       map.current.setPaintProperty('zone-3d', 'fill-extrusion-height', 0)
       return
     }
-
     colorExpr.push(darkColor)
     heightExpr.push(0)
 
     try {
       map.current.setPaintProperty('zone-3d', 'fill-extrusion-color', colorExpr)
       map.current.setPaintProperty('zone-3d', 'fill-extrusion-height', heightExpr)
-      map.current.setPaintProperty('zone-3d', 'fill-extrusion-opacity', is3D ? 0.75 : 0.85)
+      // highlight via featureState : opacité normale sur tous
+      map.current.setPaintProperty('zone-3d', 'fill-extrusion-opacity', [
+        'case', ['boolean', ['feature-state', 'selected'], false], 1.0,
+        is3D ? 0.75 : 0.85
+      ])
     } catch (error) {
-      console.error("Erreur lors de l'application du style MapLibre:", error)
+      console.error("Erreur setPaintProperty:", error)
     }
-  }, [scores, scoreKey, activeColor, activeIndicateur?.darkColor, mapReady, is3D, selected, granularite, zonesLoaded])
+  }, [scores, scoreKey, activeColor, activeIndicateur?.darkColor, mapReady, is3D, granularite, zonesLoaded])
+
+  // Highlight sélection via featureState — ne recalcule pas les couleurs
+  const prevSelectedFidRef = useRef(null)
+  const zoneIdMapRef        = useRef({})  // _id_zone -> feature id MapLibre (généré par generateId)
+  useEffect(() => {
+    if (!mapReady || !map.current || !map.current.getSource('zones')) return
+    // Désélectionne l'ancien
+    if (prevSelectedFidRef.current !== null) {
+      map.current.setFeatureState(
+        { source: 'zones', id: prevSelectedFidRef.current },
+        { selected: false }
+      )
+    }
+    if (selected === null) { prevSelectedFidRef.current = null; return }
+    const fid = zoneIdMapRef.current[parseInt(selected)]
+    if (fid == null) { prevSelectedFidRef.current = null; return }
+    map.current.setFeatureState({ source: 'zones', id: fid }, { selected: true })
+    prevSelectedFidRef.current = fid
+  }, [selected, mapReady, zonesLoaded])
 
   // chargement des points pour la zone sélectionnée
   useEffect(() => {
@@ -414,10 +469,15 @@ export default function MapView({
   }, [year])  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    Object.entries(markersByTypeId.current).forEach(([typeId, markers]) => {
-      const show = visibleTypes.includes(typeId)
-      markers.forEach(m => { m.getElement().style.display = show ? 'block' : 'none' })
-    })
+    if (!map.current || !map.current.getSource('points')) return
+    if (!taggedFeaturesRef.current.length) return
+    const visSet = new Set(visibleTypes)
+    const updated = taggedFeaturesRef.current.map(f => ({
+      ...f,
+      properties: { ...f.properties, _visible: visSet.has(f.properties._pt_id) ? 1 : 0 },
+    }))
+    taggedFeaturesRef.current = updated
+    map.current.getSource('points').setData({ type: 'FeatureCollection', features: updated })
   }, [visibleTypes])
 
   useEffect(() => {
@@ -435,11 +495,11 @@ export default function MapView({
 
 function getHeatColor(normalized) {
   const colors = [
-    { t: 0.0,  hex: '#d73027' },  
-    { t: 0.25, hex: '#fc8d59' },
+    { t: 0.0,  hex: '#1a9850' },
+    { t: 0.25, hex: '#91cf60' },
     { t: 0.5,  hex: '#fee08b' },
-    { t: 0.75, hex: '#91cf60' },
-    { t: 1.0,  hex: '#1a9850' },  
+    { t: 0.75, hex: '#fc8d59' },
+    { t: 1.0,  hex: '#d73027' },
   ]
   for (let i = 0; i < colors.length - 1; i++) {
     const a = colors[i], b = colors[i + 1]

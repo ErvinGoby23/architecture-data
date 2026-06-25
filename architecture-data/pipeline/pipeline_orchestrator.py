@@ -278,7 +278,7 @@ def run_gold_services(date_str: str):
         return None
 
 # ──────────────────────────────────────────────
-# SILVER — INDICATEUR 5 (Logement)
+# SILVER & GOLD — INDICATEUR 5 (Logement)
 # ──────────────────────────────────────────────
 @task(name="Silver - DVF", retries=1)
 def run_silver_dvf(date_str: str):
@@ -319,6 +319,22 @@ def run_silver_fusion_ind5(date_str: str):
     except Exception as e:
         logger.warning(f"Fusion ind5 — erreur : {e}")
         logger.warning("Fallback actif : Parquet reste la source canonique")
+        return None
+
+@task(name="Gold - Score accessibilite logement", retries=1)
+def run_gold_accessibilite(date_str: str):
+    logger = get_run_logger()
+    logger.info(f"Gold score accessibilite logement — {date_str}")
+    logger.info("Cible ecriture : PostgreSQL primary (5432)")
+    script = os.path.join(ROOT_DIR, "gold", "indicateur5", "gold_score_accessibilite.py")
+    try:
+        duration = run_script(script, date_str)
+        logger.info(f"Gold accessibilite OK en {duration}s")
+        logger.info("Resilience : Parquet Gold OK — PostgreSQL primary ecrit, replica (5433) synchronise via WAL")
+        return duration
+    except Exception as e:
+        logger.warning(f"Gold accessibilite — PostgreSQL primary indisponible : {e}")
+        logger.warning("Fallback actif : Parquet Gold reste la source canonique")
         return None
 
 # ──────────────────────────────────────────────
@@ -418,9 +434,11 @@ def main_pipeline():
         future_mob      = run_gold_mobilite.submit(current_date)
         future_conn     = run_gold_connectivite.submit(current_date)
         future_services = run_gold_services.submit(current_date)
+        future_access   = run_gold_accessibilite.submit(current_date)
         future_mob.result()
         future_conn.result()
         future_services.result()
+        future_access.result()
         logger.info("Gold OK")
 
         # ── LOAD TEST ────────────────────────────────────────────────────
@@ -444,7 +462,8 @@ def main_pipeline():
         vol_gold_ind1 = folder_size_mb(os.path.join(ROOT_DIR, "gold", "indicateur1", current_date))
         vol_gold_ind2 = folder_size_mb(os.path.join(ROOT_DIR, "gold", "indicateur2", current_date))
         vol_gold_ind4 = folder_size_mb(os.path.join(ROOT_DIR, "gold", "indicateur4", current_date))
-        vol_gold      = round(vol_gold_ind1 + vol_gold_ind2 + vol_gold_ind4, 2)
+        vol_gold_ind5 = folder_size_mb(os.path.join(ROOT_DIR, "gold", "indicateur5", current_date))
+        vol_gold      = round(vol_gold_ind1 + vol_gold_ind2 + vol_gold_ind4 + vol_gold_ind5, 2)
 
         total_volume = round(vol_bronze + vol_silver + vol_gold, 2)
         debit_mbs    = round(total_volume / total_duration, 2) if total_duration > 0 else 0
@@ -465,6 +484,7 @@ def main_pipeline():
         logger.info(f"  Indicateur 1 Mobilite  : {vol_gold_ind1} MB")
         logger.info(f"  Indicateur 2 Connectivite : {vol_gold_ind2} MB")
         logger.info(f"  Indicateur 4 Services  : {vol_gold_ind4} MB")
+        logger.info(f"  Indicateur 5 Logement  : {vol_gold_ind5} MB")
         logger.info(f"  Total Gold             : {vol_gold} MB")
         logger.info(f"--- Synthese ---")
         logger.info(f"Volume total pipeline    : {total_volume} MB")

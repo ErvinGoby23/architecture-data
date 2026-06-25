@@ -56,12 +56,15 @@ os.makedirs(GOLD_DIR, exist_ok=True)
 # FONCTIONS COMMUNES
 # ==========================================================================
 
-def normalize(series):
-    s = pd.to_numeric(series, errors='coerce')
-    min_v, max_v = s.min(), s.max()
-    if pd.isna(min_v) or max_v == min_v:
-        return pd.Series([0.5] * len(s), index=s.index)
-    return (s - min_v) / (max_v - min_v)
+def normalize_par_annee(df, col):
+    """Normalise min-max au sein de chaque année pour que le rang soit relatif à l'année."""
+    def _norm(g):
+        s = pd.to_numeric(g, errors='coerce')
+        min_v, max_v = s.min(), s.max()
+        if pd.isna(min_v) or max_v == min_v:
+            return pd.Series([0.5] * len(s), index=s.index)
+        return (s - min_v) / (max_v - min_v)
+    return df.groupby('annee')[col].transform(_norm)
 
 
 def rang_categorie_par_annee(df, score_col='score_accessibilite'):
@@ -122,10 +125,10 @@ df = pd.read_parquet(SILVER_FUSION_PATH)
 print(f"Shape fusion silver arrondissement : {df.shape}")
 
 # sous-scores
-df['score_prix']   = 1 - normalize(df['prix_m2_median'])
-df['score_social'] = normalize(df['nb_logements'])
 df['capacite_achat'] = (df['revenu_median'] / df['prix_m2_median']).round(3)
-df['score_revenu'] = normalize(df['capacite_achat'])
+df['score_prix']   = 1 - normalize_par_annee(df, 'prix_m2_median')
+df['score_social'] = normalize_par_annee(df, 'nb_logements')
+df['score_revenu'] = normalize_par_annee(df, 'capacite_achat')
 
 df['score_accessibilite'] = (
     df['score_prix']   * 0.40 +
@@ -180,8 +183,8 @@ if not os.path.exists(SILVER_FUSION_QU_PATH):
 df_qu = pd.read_parquet(SILVER_FUSION_QU_PATH)
 print(f"Shape fusion silver quartier : {df_qu.shape}")
 
-df_qu['score_prix']   = 1 - normalize(df_qu['prix_m2_median'])
-df_qu['score_social'] = normalize(df_qu['nb_logements'])
+df_qu['score_prix']   = 1 - normalize_par_annee(df_qu, 'prix_m2_median')
+df_qu['score_social'] = normalize_par_annee(df_qu, 'nb_logements')
 
 df_qu['score_accessibilite'] = (
     df_qu['score_prix']   * 0.60 +
