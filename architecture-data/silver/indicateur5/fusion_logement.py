@@ -15,11 +15,19 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+from pymongo import MongoClient, GEOSPHERE
+
+# modules Silver (réutilisés pour reconstruire les points géolocalisés)
+import silver_dvf as SDVF
+import silver_logements_sociaux as SLS
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".." / ".." / ".." / ".env")
 
 PG_URL = os.getenv("PG_URL")
+MONGO_URL = os.getenv("MONGO_URL")
+MONGO_DB = "silver"
+MONGO_COLLECTION = "indicateur_logement"
 
 SILVER_BASE = BASE_DIR / "nettoyage-indicateur5"
 GOLD_OUTPUT_DIR = BASE_DIR / "indicateur_logement"
@@ -176,5 +184,112 @@ if PG_URL:
         print(f"❌ PostgreSQL indisponible — export ignoré : {e}")
 else:
     print("ℹ PG_URL absent du .env — export PostgreSQL ignoré.")
+
+# ==========================================================================
+# 6. POINTS GÉOSPATIAUX -> MONGODB (transactions DVF + programmes sociaux)
+# ==========================================================================
+print("\n--- INSERTION DES POINTS GÉOSPATIAUX DANS MONGODB ---")
+
+
+def _build_points_dvf():
+    """Transactions DVF unitaires (1 point = 1 vente, avec prix) -> documents GeoJSON."""
+    import geopandas as gpd
+
+    df = SDVF.load_bronze(SDVF.BRONZE)
+    df = SDVF.prefiltre_paris(df)
+    df = SDVF.clean(df)
+    appt = SDVF.filtre_metier(df)  # 1 ligne = 1 mutation, prix_m2 calculé
+
+    gdf_qu = SDVF._charger_quartiers_gdf()
+    pts = appt.dropna(subset=["longitude", "latitude"]).copy()
+    g = gpd.GeoDataFrame(
+        pts, geometry=gpd.points_from_xy(pts["longitude"], pts["latitude"]),
+        crs="EPSG:4326")
+    j = gpd.sjoin(g, gdf_qu, how="left", predicate="within")
+    j = j.rename(columns={"C_QU": "code_quartier", "L_QU": "nom_quartier"})
+    j = j.drop(columns=[c for c in j.columns if c.startswith("index_right")], errors="ignore")
+    j["code_quartier"] = pd.to_numeric(j["code_quartier"], errors="coerce")
+
+    docs = []
+    for _, r in j.iterrows():
+        docs.append({
+            "type": "transaction",
+            "geo": {"type": "Point",
+                    "coordinates": [float(r["longitude"]), float(r["latitude"])]},
+            "code_postal": int(r["arrondissement"]) + 75000,
+            "arrondissement": int(r["arrondissement"]),
+            "code_quartier": int(r["code_quartier"]) if pd.notna(r["code_quartier"]) else None,
+            "nom_quartier": r.get("nom_quartier"),
+            "annee": int(r["annee"]),
+            "prix_m2": round(float(r["prix_m2"]), 0),
+            "valeur_fonciere": float(r["valeur_fonciere"]),
+            "surface": float(r["surface_reelle_bati"]),
+        })
+    return docs
+
+
+def _build_points_ls():
+    """Programmes de logements sociaux (1 point = 1 programme) -> documents GeoJSON."""
+    import geopandas as gpd
+
+    df = SLS.load_bronze(SLS.resolve_bronze())
+    df = SLS.clean(df)
+
+    gdf_qu = SLS._charger_quartiers_gdf()
+    pts = df.dropna(subset=["x_l93", "y_l93"]).copy()
+    g = gpd.GeoDataFrame(
+        pts, geometry=gpd.points_from_xy(pts["x_l93"], pts["y_l93"]),
+        crs="EPSG:2154").to_crs("EPSG:4326")
+    j = gpd.sjoin(g, gdf_qu, how="left", predicate="within")
+    j = j.rename(columns={"C_QU": "code_quartier", "L_QU": "nom_quartier"})
+    j = j.drop(columns=[c for c in j.columns if c.startswith("index_right")], errors="ignore")
+    j["code_quartier"] = pd.to_numeric(j["code_quartier"], errors="coerce")
+
+    docs = []
+    for idx, r in j.iterrows():
+        lon, lat = j.geometry.loc[idx].x, j.geometry.loc[idx].y
+        docs.append({
+            "type": "logement_social",
+            "geo": {"type": "Point", "coordinates": [float(lon), float(lat)]},
+            "code_postal": int(r["arrondissement"]) + 75000,
+            "arrondissement": int(r["arrondissement"]),
+            "code_quartier": int(r["code_quartier"]) if pd.notna(r["code_quartier"]) else None,
+            "nom_quartier": r.get("nom_quartier"),
+            "annee": int(r["annee"]),
+            "nb_logements": int(r["nb_logements"]) if pd.notna(r.get("nb_logements")) else 0,
+            "nature_programme": r.get("nature_programme"),
+            "bailleur": r.get("bailleur"),
+        })
+    return docs
+
+
+if MONGO_URL:
+    try:
+        dvf_docs = _build_points_dvf()
+        print(f"   ↳ DVF : {len(dvf_docs)} transactions géolocalisées")
+        ls_docs = _build_points_ls()
+        print(f"   ↳ LS  : {len(ls_docs)} programmes géolocalisés")
+
+        client = MongoClient(MONGO_URL)
+        mongo = client[MONGO_DB]
+        mongo[MONGO_COLLECTION].drop()
+
+        if dvf_docs:
+            mongo[MONGO_COLLECTION].insert_many(dvf_docs, ordered=False)
+        if ls_docs:
+            mongo[MONGO_COLLECTION].insert_many(ls_docs, ordered=False)
+
+        mongo[MONGO_COLLECTION].create_index([("geo", GEOSPHERE)])
+        mongo[MONGO_COLLECTION].create_index([("code_postal", 1)])
+        mongo[MONGO_COLLECTION].create_index([("code_quartier", 1)])
+        mongo[MONGO_COLLECTION].create_index([("annee", 1)])
+        mongo[MONGO_COLLECTION].create_index([("type", 1)])
+
+        total = mongo[MONGO_COLLECTION].count_documents({})
+        print(f"✓ MongoDB : {MONGO_DB}.{MONGO_COLLECTION} ({total} documents) + index 2dsphere")
+    except Exception as e:
+        print(f"❌ MongoDB indisponible — points ignorés : {e}")
+else:
+    print("ℹ MONGO_URL absent du .env — export MongoDB ignoré.")
 
 print("\n=== FUSION SILVER LOGEMENT TERMINÉE ===")

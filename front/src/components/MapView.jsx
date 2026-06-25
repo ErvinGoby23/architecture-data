@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
-import { fetchPointsMobilite, fetchPointsConnectivite, fetchPointsServices } from '../api/index'
+import { fetchPointsMobilite, fetchPointsConnectivite, fetchPointsServices, fetchPointsLogement } from '../api/index'
+
+// année courante partagée avec le wrapper logement (mise à jour par un effet)
+let _currentYear = null
 
 const POINTS_FETCHERS = {
   mobilite:     fetchPointsMobilite,
   connectivite: fetchPointsConnectivite,
   services:     fetchPointsServices,
+  // logement : signature adaptée + année active + (les 2 types de points sont renvoyés)
+  logement: ({ granularite, arrondissement, code_quartier }) =>
+    fetchPointsLogement({
+      arrondissement: granularite === 'quartier' ? null : arrondissement,
+      code_quartier:  granularite === 'quartier' ? code_quartier : null,
+      annee: _currentYear,
+    }),
 }
 
 const ARRONDISSEMENTS_URL = 'https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/arrondissements/exports/geojson?lang=fr'
@@ -23,7 +33,8 @@ const MODES = [
 
 function buildPopupHTML(label, data, indicateurId) {
   if (!data) return `<div class="popup-cp">${label}</div>`
-  const score = data.score_mobilite_100 ?? data.score_connectivite_100 ?? data.score_services_100 ?? '—'
+  const score = data.score_mobilite_100 ?? data.score_connectivite_100
+              ?? data.score_services_100 ?? data.score_accessibilite_100 ?? '—'
   const header = `
     <div class="popup-cp">${label}</div>
     <div class="popup-score">${score}<span>/100</span></div>
@@ -94,6 +105,23 @@ function buildPopupHTML(label, data, indicateurId) {
     }
     return html
   }
+  if (indicateurId === 'logement') {
+    return header + `
+      <div class="popup-section-title">Marché immobilier</div>
+      <div class="popup-grid">
+        <div class="popup-stat"><span class="popup-stat-val">${data.prix_m2_median ?? '—'} €</span><span class="popup-stat-lbl">Prix/m²</span></div>
+        <div class="popup-stat"><span class="popup-stat-val">${data.nb_ventes ?? 0}</span><span class="popup-stat-lbl">Ventes</span></div>
+        <div class="popup-stat"><span class="popup-stat-val">${data.surface_mediane ?? '—'} m²</span><span class="popup-stat-lbl">Surface méd.</span></div>
+      </div>
+      <div class="popup-divider"></div>
+      <div class="popup-section-title">Social & revenus</div>
+      <div class="popup-grid">
+        <div class="popup-stat"><span class="popup-stat-val">${data.nb_logements ?? 0}</span><span class="popup-stat-lbl">Log. sociaux</span></div>
+        ${data.revenu_median != null ? `<div class="popup-stat"><span class="popup-stat-val">${data.revenu_median} €</span><span class="popup-stat-lbl">Revenu méd.</span></div>` : ''}
+        ${data.taux_effort_achat != null ? `<div class="popup-stat"><span class="popup-stat-val">${data.taux_effort_achat}</span><span class="popup-stat-lbl">Effort (ans)</span></div>` : ''}
+      </div>
+    `
+  }
   return header
 }
 
@@ -107,6 +135,7 @@ export default function MapView({
   scores, scoreKey, activeColor, activeIndicateur,
   visibleTypes, selected, onSelect, is3D, loading,
   granularite = 'arrondissement',
+  year = null,
 }) {
   const mapContainer    = useRef(null)
   const map             = useRef(null)
@@ -239,7 +268,7 @@ export default function MapView({
         map.current.on('click', 'zone-3d', (e) => {
           const id = e.features[0].properties._id_zone
           if (parseInt(id) === parseInt(selectedRef.current)) {
-            onSelectRef.current(null)  // désélectionne au 2e clic
+            onSelectRef.current(null)
           } else {
             onSelectRef.current(id)
           }
@@ -338,6 +367,7 @@ export default function MapView({
     }
   }, [scores, scoreKey, activeColor, activeIndicateur?.darkColor, mapReady, is3D, selected, granularite, zonesLoaded])
 
+  // chargement des points pour la zone sélectionnée
   useEffect(() => {
     clearMarkers()
     if (!mapReady || !activeIndicateur?.pointsEndpoint || !selected) return
@@ -360,6 +390,28 @@ export default function MapView({
       })
       .catch(console.error)
   }, [activeIndicateur?.id, mapReady, selected, granularite])
+
+  // LOGEMENT : l'année change -> points d'une autre année invalides -> recharger
+  useEffect(() => {
+    _currentYear = year
+    if (!mapReady) return
+    // seuls les indicateurs temporels (points dépendant de l'année) sont concernés
+    if (!activeIndicateur?.hasYearFilter || !activeIndicateur?.pointsEndpoint) return
+    allPointsCache.current = {}
+    if (!selected) { clearMarkers(); return }
+    const gran    = granularite
+    const fetcher = POINTS_FETCHERS[activeIndicateur.id]
+    if (!fetcher) return
+    const param = gran === 'quartier'
+      ? { granularite: 'quartier',       code_quartier:  selected }
+      : { granularite: 'arrondissement', arrondissement: selected }
+    fetcher(param)
+      .then(geojson => {
+        allPointsCache.current[`${activeIndicateur.id}_${gran}_${selected}`] = geojson
+        showMarkersForSelected(selected, gran)
+      })
+      .catch(console.error)
+  }, [year])  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     Object.entries(markersByTypeId.current).forEach(([typeId, markers]) => {

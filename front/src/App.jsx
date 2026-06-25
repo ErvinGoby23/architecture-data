@@ -2,15 +2,17 @@ import { useState, useEffect } from 'react'
 import MapView  from './components/MapView'
 import Sidebar  from './components/Sidebar'
 import { INDICATEURS } from './indicateurs/index'
-import { fetchScoresMobilite, fetchScoresConnectivite, fetchScoresServices } from './api/index'
+import { fetchScoresMobilite, fetchScoresConnectivite, fetchScoresServices, fetchScoresLogement } from './api/index'
 import './index.css'
 import RankingPanel from './components/RankingPanel'
 import ComparePanel from './components/ComparePanel'
+import BandeauLogement from './components/BandeauLogement'
 
 const SCORES_FETCHERS = {
   mobilite:     fetchScoresMobilite,
   connectivite: fetchScoresConnectivite,
   services:     fetchScoresServices,
+  logement:     fetchScoresLogement,
 }
 
 export default function App() {
@@ -21,7 +23,9 @@ export default function App() {
     INDICATEURS[0].pointTypes?.map(p => p.id) ?? []
   )
   const [granularite, setGranularite] = useState('arrondissement')
-  const [year, setYear]           = useState(null)
+  const [year, setYear] = useState(
+  INDICATEURS[0].hasYearFilter ? (INDICATEURS[0].defaultYear ?? 2025) : null
+  )
   const [refreshKey, setRefreshKey] = useState(0)
   const [scores, setScores]       = useState([])
   const [loading, setLoading]     = useState(true)
@@ -92,8 +96,12 @@ export default function App() {
       <Sidebar
         indicateurs={INDICATEURS}
         activeIndicateur={activeIndicateur}
-        onSelectIndicateur={(ind) => { setActiveIndicateur(ind); setSelected(null); setYear(null) }}
-        selected={selected}
+        onSelectIndicateur={(ind) => {
+          setActiveIndicateur(ind)
+          setSelected(null)
+          // indicateur temporel -> année par défaut (la plus récente) ; sinon null
+          setYear(ind.hasYearFilter ? (ind.defaultYear ?? 2025) : null)
+        }}        selected={selected}
         scores={scores}
         visibleTypes={visibleTypes}
         onToggleType={handleToggleType}

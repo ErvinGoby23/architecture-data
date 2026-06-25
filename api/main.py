@@ -8,7 +8,7 @@ from slowapi.errors import RateLimitExceeded
 from dependencies import limiter
 
 # 1. AJOUTER L'IMPORT DU NOUVEAU ROUTEUR ICI
-from routers import mobilite, connectivite, services
+from routers import mobilite, connectivite, services, logement
 
 app = FastAPI(
     title="Urban Data Explorer API",
@@ -39,9 +39,10 @@ app.add_middleware(
 
 app.include_router(mobilite.router)
 app.include_router(connectivite.router)
+app.include_router(services.router)
 
 # 2. AJOUTER LE ROUTEUR À L'APPLICATION ICI
-app.include_router(services.router)
+app.include_router(logement.router)
 
 @app.get("/", tags=["Info"])
 def root():
@@ -58,5 +59,7 @@ def get_quota():
             "/connectivite/points/geojson": "30 requêtes/minute",
             "/services":                    "60 requêtes/minute",
             "/services/points/geojson":     "30 requêtes/minute",
+            "/logement":                    "60 requêtes/minute",
+            "/logement/points/geojson":     "30 requêtes/minute",
         },
     }
