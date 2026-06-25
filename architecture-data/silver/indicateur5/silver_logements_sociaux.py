@@ -9,6 +9,8 @@ DEUX sorties :
      (jointure spatiale x_l93/y_l93 Lambert93 -> quartier via quartiers.csv)
 """
 
+import sys
+from datetime import datetime
 from pathlib import Path
 import pandas as pd
 
@@ -17,7 +19,10 @@ PROJET = HERE.parents[1]
 BRONZE_NAME = "logements-sociaux-finances-a-paris.csv"
 BRONZE = PROJET / "brute" / "Nouveau dossier" / BRONZE_NAME
 QUARTIERS_CSV = PROJET / "brute" / "indicateur-Score-accessibilité-mobilité" / "quartiers.csv"
-SILVER_DIR = HERE
+
+date_str = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime("%Y-%m-%d")
+
+SILVER_DIR = HERE / "nettoyage-indicateur5" / date_str
 SILVER_OUT = SILVER_DIR / "logements_sociaux_silver.parquet"
 SILVER_OUT_QU = SILVER_DIR / "logements_sociaux_silver_quartier.parquet"
 
@@ -101,7 +106,6 @@ def aggregate_arr(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _charger_quartiers_gdf():
-    """Charge quartiers.csv (géométrie GeoJSON inline, schéma Open Data Paris)."""
     import json
     import geopandas as gpd
     from shapely.geometry import shape
@@ -128,11 +132,6 @@ def _charger_quartiers_gdf():
 
 
 def aggregate_quartier(df: pd.DataFrame) -> pd.DataFrame:
-    """Jointure spatiale point (x_l93/y_l93 en Lambert-93) -> quartier, puis agrégation.
-
-    Les coordonnées sont en Lambert-93 (EPSG:2154) : on construit les points dans
-    ce CRS puis on reprojette en WGS84 avant la jointure avec le fond quartiers.
-    """
     import geopandas as gpd
 
     gdf_qu = _charger_quartiers_gdf()
@@ -141,8 +140,8 @@ def aggregate_quartier(df: pd.DataFrame) -> pd.DataFrame:
     gdf_pts = gpd.GeoDataFrame(
         pts,
         geometry=gpd.points_from_xy(pts["x_l93"], pts["y_l93"]),
-        crs="EPSG:2154",                      # Lambert-93
-    ).to_crs("EPSG:4326")                       # -> WGS84 pour matcher les quartiers
+        crs="EPSG:2154",
+    ).to_crs("EPSG:4326")
 
     joined = gpd.sjoin(gdf_pts, gdf_qu, how="left", predicate="within")
     joined = joined.rename(columns={"C_QU": "code_quartier", "L_QU": "nom_quartier"})
@@ -168,8 +167,8 @@ def main():
     df = load_bronze(resolve_bronze())
     df = clean(df)
 
-    silver = aggregate_arr(df)
     SILVER_DIR.mkdir(parents=True, exist_ok=True)
+    silver = aggregate_arr(df)
     silver.to_parquet(SILVER_OUT, index=False)
     print(f"[LS] Bronze nettoyé : {len(df):,} programmes")
     print(f"[LS] Silver ARR : {len(silver)} lignes -> {SILVER_OUT}")

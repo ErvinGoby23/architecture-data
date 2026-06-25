@@ -20,18 +20,18 @@ for _env_candidate in [
 ]:
     if os.path.exists(_env_candidate):
         load_dotenv(_env_candidate)
-        print(f"⚙️  .env chargé : {os.path.abspath(_env_candidate)}")
+        print(f".env chargé : {os.path.abspath(_env_candidate)}")
         break
 else:
-    print("⚠️  Aucun fichier .env trouvé — variables d'environnement système utilisées si présentes.")
+    print("Aucun fichier .env trouvé — variables d'environnement système utilisées si présentes.")
 
-SILVER_DIR_IND4       = os.path.join(ROOT_DIR, 'silver', 'indicateur4', 'indicateur_services')
-SILVER_FUSION_PATH    = os.path.join(SILVER_DIR_IND4, 'indicateur_services_quotidien.parquet')
-SILVER_FUSION_QU_PATH = os.path.join(SILVER_DIR_IND4, 'indicateur_services_quotidien_quartier.parquet')
+date_str = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime('%Y-%m-%d')
 
-date_str = datetime.now().strftime('%Y-%m-%d')
+print(f"=== GOLD (IND4 - SERVICES) — Date : {date_str} ===")
 
-print(f"=== GOLD (IND4 - SERVICES) — Date d'export : {date_str} ===")
+SILVER_OUTPUT_DIR     = os.path.join(ROOT_DIR, 'silver', 'indicateur4', 'nettoyage-indicateur4', date_str)
+SILVER_FUSION_PATH    = os.path.join(SILVER_OUTPUT_DIR, 'indicateur_services_quotidien.parquet')
+SILVER_FUSION_QU_PATH = os.path.join(SILVER_OUTPUT_DIR, 'indicateur_services_quotidien_quartier.parquet')
 
 BRUTE_DIR = os.path.join(ROOT_DIR, 'brute', 'indicateur-Score-accessibilité-mobilité')
 GOLD_DIR  = os.path.join(ROOT_DIR, 'gold', 'indicateur4', date_str)
@@ -45,7 +45,6 @@ os.makedirs(GOLD_DIR, exist_ok=True)
 # ==========================================================================
 
 def normalize(series):
-    """Normalisation min-max → [0, 1]"""
     min_v, max_v = series.min(), series.max()
     if max_v == min_v:
         return pd.Series([0.5] * len(series), index=series.index)
@@ -53,12 +52,11 @@ def normalize(series):
 
 
 def exporter(df_gold, table_name, pk_col, parquet_path, engine):
-    """Export Parquet + PostgreSQL."""
     df_gold.to_parquet(parquet_path, index=False)
-    print(f'✓ Parquet : {parquet_path}')
+    print(f'Parquet : {parquet_path}')
 
     if engine is None:
-        print(f'❌ PostgreSQL indisponible pour {table_name} — export ignoré.')
+        print(f'PostgreSQL indisponible pour {table_name} — export ignoré.')
         return
 
     try:
@@ -70,7 +68,7 @@ def exporter(df_gold, table_name, pk_col, parquet_path, engine):
         with engine.connect() as conn:
             conn.execute(text(f"ALTER TABLE gold.{table_name} ADD PRIMARY KEY ({pk_col})"))
             conn.commit()
-        print(f'✓ PostgreSQL : gold.{table_name} ({len(df_gold)} lignes)')
+        print(f'PostgreSQL : gold.{table_name} ({len(df_gold)} lignes)')
     except Exception as e:
         print(f'PostgreSQL indisponible pour {table_name} : {e}')
 
@@ -78,8 +76,8 @@ def exporter(df_gold, table_name, pk_col, parquet_path, engine):
 # ==========================================================================
 # LECTURE SURFACE - ARRONDISSEMENTS
 # ==========================================================================
-csv_arr     = os.path.join(BRUTE_DIR, 'arrondissements.csv')
-df_arr_ref  = pd.read_csv(csv_arr, sep=';')
+csv_arr    = os.path.join(BRUTE_DIR, 'arrondissements.csv')
+df_arr_ref = pd.read_csv(csv_arr, sep=';')
 df_arr_ref.columns = df_arr_ref.columns.str.strip()
 col_surface_arr = next((c for c in df_arr_ref.columns if 'surface' in c.lower()), None)
 col_num_arr     = next((c for c in df_arr_ref.columns if 'numéro' in c.lower() and 'insee' not in c.lower() and 'séquentiel' not in c.lower()), None)
@@ -101,16 +99,16 @@ try:
     engine = create_engine(PG_URL)
 except Exception as e:
     engine = None
-    print(f'⚠️ Moteur PostgreSQL non initialisé : {e}')
+    print(f'Moteur PostgreSQL non initialisé : {e}')
 
 
 # ==========================================================================
-# BLOC 1 - SCORE PAR ARRONDISSEMENT (20 arrondissements, avec commerces)
+# BLOC 1 - SCORE PAR ARRONDISSEMENT
 # ==========================================================================
 print("\n--- GOLD ARRONDISSEMENT ---")
 
 if not os.path.exists(SILVER_FUSION_PATH):
-    raise FileNotFoundError(f"❌ Fusion silver arrondissement introuvable : {SILVER_FUSION_PATH}")
+    raise FileNotFoundError(f"Fusion silver arrondissement introuvable : {SILVER_FUSION_PATH}")
 
 df = pd.read_parquet(SILVER_FUSION_PATH)
 print(f"Shape fusion silver arrondissement : {df.shape}")
@@ -143,10 +141,10 @@ df['categorie'] = pd.cut(
 
 df_arr_gold = df.sort_values('rang').reset_index(drop=True)
 
-assert df_arr_gold['score_services'].isna().sum() == 0,   "❌ NaN dans score_services (arrondissement)"
-assert df_arr_gold['score_services'].between(0, 1).all(), "❌ Score hors [0,1] (arrondissement)"
-assert len(df_arr_gold) == 20,                            f"❌ Nombre d'arrondissements incorrect : {len(df_arr_gold)} (attendu 20)"
-assert df_arr_gold['rang'].nunique() == 20,               "❌ Rangs non uniques (arrondissement)"
+assert df_arr_gold['score_services'].isna().sum() == 0,   "NaN dans score_services (arrondissement)"
+assert df_arr_gold['score_services'].between(0, 1).all(), "Score hors [0,1] (arrondissement)"
+assert len(df_arr_gold) == 20,                            f"Nombre d'arrondissements incorrect : {len(df_arr_gold)} (attendu 20)"
+assert df_arr_gold['rang'].nunique() == 20,               "Rangs non uniques (arrondissement)"
 
 cols_keep_arr = [
     'code_postal', 'arrondissement',
@@ -172,42 +170,35 @@ exporter(
 
 
 # ==========================================================================
-# BLOC 2 - SCORE PAR QUARTIER (80 quartiers, ecoles + commissariats, SANS commerces)
+# BLOC 2 - SCORE PAR QUARTIER
 # ==========================================================================
 print("\n--- GOLD QUARTIER ---")
 
 if not os.path.exists(SILVER_FUSION_QU_PATH):
-    raise FileNotFoundError(f"❌ Fusion silver quartier introuvable : {SILVER_FUSION_QU_PATH}")
+    raise FileNotFoundError(f"Fusion silver quartier introuvable : {SILVER_FUSION_QU_PATH}")
 
-# Partir de la référence complète pour garantir 80 quartiers
 df_qu = df_surface_qu[['code_quartier', 'nom_quartier', 'arrondissement', 'surface_km2']].copy()
 
-# Merger avec les données silver (left join depuis la référence)
 df_silver_qu = pd.read_parquet(SILVER_FUSION_QU_PATH)
 df_qu = df_qu.merge(df_silver_qu, on='code_quartier', how='left')
 
 print(f"Shape fusion silver quartier : {df_silver_qu.shape}")
 print(f"Shape après merge référence  : {df_qu.shape}")
 
-# Remplir les NaN par 0 pour les quartiers sans données
 df_qu['nb_ecoles']        = df_qu['nb_ecoles'].fillna(0).astype(int)
 df_qu['nb_commissariats'] = df_qu['nb_commissariats'].fillna(0).astype(int)
 
-# Complétion nom_quartier/arrondissement depuis la référence si absent
 for col in ['nom_quartier', 'arrondissement']:
     if f'{col}_ref' in df_qu.columns:
         df_qu[col] = df_qu[col].fillna(df_qu[f'{col}_ref'])
         df_qu = df_qu.drop(columns=[f'{col}_ref'])
 
-# Indicateurs par km²
 df_qu['ecoles_par_km2']        = (df_qu['nb_ecoles']        / df_qu['surface_km2']).round(2)
 df_qu['commissariats_par_km2'] = (df_qu['nb_commissariats'] / df_qu['surface_km2']).round(2)
 
-# Normalisation
 df_qu['score_ecoles']        = normalize(df_qu['ecoles_par_km2'])
 df_qu['score_commissariats'] = normalize(df_qu['commissariats_par_km2'])
 
-# Score final pondéré : 60% écoles, 40% commissariats (sans commerces)
 df_qu['score_services'] = (
     df_qu['score_ecoles']        * 0.60 +
     df_qu['score_commissariats'] * 0.40
@@ -224,12 +215,11 @@ df_qu['categorie'] = pd.cut(
 
 df_qu_gold = df_qu.sort_values('rang').reset_index(drop=True)
 
-# Validation
-assert df_qu_gold['score_services'].isna().sum() == 0,   "❌ NaN dans score_services (quartier)"
-assert df_qu_gold['score_services'].between(0, 1).all(), "❌ Score hors [0,1] (quartier)"
-assert len(df_qu_gold) == 80,                            f"❌ Nombre de quartiers incorrect : {len(df_qu_gold)} (attendu 80)"
-assert df_qu_gold['rang'].nunique() == 80,               "❌ Rangs non uniques (quartier)"
-print(f"   ↳ Quartiers traités : {len(df_qu_gold)}")
+assert df_qu_gold['score_services'].isna().sum() == 0,   "NaN dans score_services (quartier)"
+assert df_qu_gold['score_services'].between(0, 1).all(), "Score hors [0,1] (quartier)"
+assert len(df_qu_gold) == 80,                            f"Nombre de quartiers incorrect : {len(df_qu_gold)} (attendu 80)"
+assert df_qu_gold['rang'].nunique() == 80,               "Rangs non uniques (quartier)"
+print(f"   Quartiers traités : {len(df_qu_gold)}")
 
 cols_keep_qu = [
     'code_quartier', 'nom_quartier', 'arrondissement',

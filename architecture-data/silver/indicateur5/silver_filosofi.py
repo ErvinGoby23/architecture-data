@@ -17,16 +17,20 @@ est unique -> la clé composite est uniquement l'arrondissement.
 On conserve `millesime` comme colonne (traçabilité) mais hors clé.
 """
 
+import sys
+from datetime import datetime
 from pathlib import Path
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
 PROJET = HERE.parents[1]
 BRONZE = PROJET / "brute" / "Indicateurs de logement" / "DS_FILOSOFI_CC_data.csv"
-SILVER_DIR = HERE
+
+date_str = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime("%Y-%m-%d")
+
+SILVER_DIR = HERE / "nettoyage-indicateur5" / date_str
 SILVER_OUT = SILVER_DIR / "filosofi_silver.parquet"
 
-# mesures FILOSOFI -> noms Silver
 MEASURE_MAP = {
     "MED_SL": "revenu_median",
     "PR_MD60": "taux_pauvrete",
@@ -48,7 +52,6 @@ def load_bronze(path: Path) -> pd.DataFrame:
 
 
 def extract_paris(df: pd.DataFrame) -> pd.DataFrame:
-    """Niveau arrondissement (ARM), géo Paris 751XX."""
     paris = df[
         (df["GEO_OBJECT"] == "ARM")
         & (df["GEO"].astype(str).str.startswith("751"))
@@ -57,7 +60,6 @@ def extract_paris(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def pivot_wide(paris: pd.DataFrame) -> pd.DataFrame:
-    """Long -> large : 1 ligne = 1 arrondissement."""
     piv = paris.pivot_table(
         index="GEO",
         columns="FILOSOFI_MEASURE",
@@ -66,17 +68,14 @@ def pivot_wide(paris: pd.DataFrame) -> pd.DataFrame:
     )
     piv["arrondissement"] = piv.index.astype(str).str[-2:].astype(int)
 
-    # garde + renomme les mesures d'intérêt présentes
     keep = {k: v for k, v in MEASURE_MAP.items() if k in piv.columns}
     out = piv[["arrondissement", *keep.keys()]].rename(columns=keep)
 
-    # millésime (traçabilité, hors clé)
     out["millesime"] = pd.to_numeric(paris["TIME_PERIOD"].iloc[0], errors="coerce")
 
     out = out[out["arrondissement"].between(1, 20)]
     out = out.sort_values("arrondissement").reset_index(drop=True)
 
-    # CLÉ COMPOSITE — source NON temporelle => arrondissement seul
     out["cle"] = out["arrondissement"].map("{:02d}".format)
 
     front = ["cle", "arrondissement", "millesime"]

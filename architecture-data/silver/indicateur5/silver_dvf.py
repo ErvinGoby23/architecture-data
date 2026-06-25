@@ -12,7 +12,8 @@ Indicateurs : prix_m2_median, prix_m2_moyen, nb_ventes, surface_mediane,
               valeur_fonciere_mediane 
 """
 
-from importlib.resources import path
+import sys
+from datetime import datetime
 from pathlib import Path
 import pandas as pd
 
@@ -20,7 +21,10 @@ HERE = Path(__file__).resolve().parent
 PROJET = HERE.parents[1]
 BRONZE = PROJET / "brute" / "Indicateurs de logement" / "dvf2.parquet"
 QUARTIERS_CSV = PROJET / "brute" / "indicateur-Score-accessibilité-mobilité" / "quartiers.csv"
-SILVER_DIR = HERE
+
+date_str = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime("%Y-%m-%d")
+
+SILVER_DIR = HERE / "nettoyage-indicateur5" / date_str
 SILVER_OUT = SILVER_DIR / "dvf_silver.parquet"
 SILVER_OUT_QU = SILVER_DIR / "dvf_silver_quartier.parquet"
 
@@ -33,19 +37,16 @@ def load_bronze(path: Path) -> pd.DataFrame:
             f"Fichier Bronze introuvable : {path}\n"
             f"Racine projet détectée : {PROJET}"
         )
-    colonnes_utiles = ['id_mutation', 'date_mutation', 'valeur_fonciere', 'code_commune', 'type_local']
-    # Ce que tu dois avoir :
+    colonnes_utiles = ['id_mutation', 'date_mutation', 'valeur_fonciere', 'code_commune',
+                       'type_local', 'nature_mutation', 'surface_reelle_bati',
+                       'longitude', 'latitude']
     df = pd.read_parquet(path, columns=colonnes_utiles)
-    df.columns = df.columns.str.strip()    
-    
+    df.columns = df.columns.str.strip()
     return df
 
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
-    # Les colonnes DVF sont en texte (object) et peuvent utiliser la virgule
-    # décimale (ex. "356644,03") -> on remplace ',' par '.' avant conversion.
-    num_cols = ["valeur_fonciere", "surface_reelle_bati", "nombre_pieces_principales",
-                "surface_terrain", "longitude", "latitude"]
+    num_cols = ["valeur_fonciere", "surface_reelle_bati", "longitude", "latitude"]
     for c in num_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(
@@ -56,21 +57,11 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
     df["annee"] = df["date_mutation"].dt.year
     df["arrondissement"] = df["code_commune"].astype(str).str[-2:]
     df["arrondissement"] = pd.to_numeric(df["arrondissement"], errors="coerce")
-
-    # Le fichier contient des lignes dupliquées à l'identique -> elles gonflent
-    # le volume de ventes ET faussent la somme des surfaces par mutation.
     df = df.drop_duplicates()
     return df
 
 
 def filtre_metier(df: pd.DataFrame) -> pd.DataFrame:
-    """Appartements vendus, prix/m² calculé au niveau MUTATION (pas au lot).
-
-    Une mutation DVF peut comporter plusieurs lignes (appartement + cave +
-    parking) partageant la même valeur_fonciere. On regroupe donc par
-    id_mutation : valeur_fonciere unique / somme des surfaces bâties des
-    appartements de la mutation -> prix_m2 réaliste.
-    """
     appt = df[
         (df["type_local"] == "Appartement")
         & (df["nature_mutation"] == "Vente")
@@ -83,9 +74,6 @@ def filtre_metier(df: pd.DataFrame) -> pd.DataFrame:
     appt["annee"] = appt["annee"].astype(int)
     appt = appt[appt["arrondissement"].between(1, 20)]
 
-    # --- regroupement au niveau mutation ---
-    # valeur_fonciere = valeur unique de la mutation (1ère occurrence)
-    # surface_bati    = somme des surfaces des lots Appartement de la mutation
     grp = appt.groupby("id_mutation")
     mut = grp.agg(
         valeur_fonciere=("valeur_fonciere", "first"),
@@ -129,7 +117,6 @@ def aggregate_arr(appt: pd.DataFrame) -> pd.DataFrame:
 
 
 def _charger_quartiers_gdf():
-    """Charge quartiers.csv (géométrie GeoJSON inline, schéma Open Data Paris)."""
     import json
     import geopandas as gpd
     from shapely.geometry import shape
@@ -156,7 +143,6 @@ def _charger_quartiers_gdf():
 
 
 def aggregate_quartier(appt: pd.DataFrame) -> pd.DataFrame:
-    """Jointure spatiale point (lon/lat WGS84) -> quartier, puis agrégation."""
     import geopandas as gpd
 
     gdf_qu = _charger_quartiers_gdf()
@@ -189,12 +175,6 @@ def aggregate_quartier(appt: pd.DataFrame) -> pd.DataFrame:
 
 
 def prefiltre_paris(df: pd.DataFrame) -> pd.DataFrame:
-    """Réduit le volume AVANT tout traitement coûteux.
-
-    Sur ~20 M de lignes France entière, on ne garde que Paris intra-muros
-    (code_commune commençant par '751') et les appartements vendus. Cela évite
-    de faire tourner clean()/str.slice sur des dizaines de millions de lignes.
-    """
     cc = df["code_commune"].astype("string")
     keep = (
         cc.str.startswith("751", na=False)
@@ -212,8 +192,8 @@ def main():
     df = clean(df)
     appt = filtre_metier(df)
 
-    silver = aggregate_arr(appt)
     SILVER_DIR.mkdir(parents=True, exist_ok=True)
+    silver = aggregate_arr(appt)
     silver.to_parquet(SILVER_OUT, index=False)
     print(f"[DVF] Appartements valides : {len(appt):,}")
     print(f"[DVF] Silver ARR : {len(silver)} lignes -> {SILVER_OUT}")
