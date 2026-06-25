@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
-import { fetchPointsMobilite, fetchPointsConnectivite, fetchPointsServices } from '../api/index'
+import { fetchPointsMobilite, fetchPointsConnectivite, fetchPointsServices, fetchPointsVivabilite } from '../api/index'
 
 const POINTS_FETCHERS = {
   mobilite:     fetchPointsMobilite,
   connectivite: fetchPointsConnectivite,
   services:     fetchPointsServices,
+  vivabilite:   fetchPointsVivabilite,
 }
 
 const ARRONDISSEMENTS_URL = 'https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/arrondissements/exports/geojson?lang=fr'
