@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
-import { fetchPointsMobilite, fetchPointsConnectivite, fetchPointsServices, fetchPointsLogement } from '../api/index'
+import { fetchPointsMobilite, fetchPointsConnectivite, fetchPointsServices, fetchPointsVivabilite, fetchPointsLogement } from '../api/index'
 
 // année courante partagée avec le wrapper logement (mise à jour par un effet)
 let _currentYear = null
@@ -9,6 +9,7 @@ const POINTS_FETCHERS = {
   mobilite:     fetchPointsMobilite,
   connectivite: fetchPointsConnectivite,
   services:     fetchPointsServices,
+  vivabilite:   fetchPointsVivabilite,
   // logement : signature adaptée + année active + (les 2 types de points sont renvoyés)
   logement: ({ granularite, arrondissement, code_quartier }) =>
     fetchPointsLogement({
@@ -33,8 +34,9 @@ const MODES = [
 
 function buildPopupHTML(label, data, indicateurId) {
   if (!data) return `<div class="popup-cp">${label}</div>`
-  const score = data.score_mobilite_100 ?? data.score_connectivite_100
-              ?? data.score_services_100 ?? data.score_accessibilite_100 ?? '—'
+const score = data.score_mobilite_100 ?? data.score_connectivite_100
+            ?? data.score_services_100 ?? data.score_accessibilite_100
+            ?? data.score_vivabilite_100 ?? data.score_logement_100 ?? '—'
   const header = `
     <div class="popup-cp">${label}</div>
     <div class="popup-score">${score}<span>/100</span></div>
@@ -121,6 +123,32 @@ function buildPopupHTML(label, data, indicateurId) {
         ${data.taux_effort_achat != null ? `<div class="popup-stat"><span class="popup-stat-val">${data.taux_effort_achat}</span><span class="popup-stat-lbl">Effort (ans)</span></div>` : ''}
       </div>
     `
+  }
+  // Dans buildPopupHTML(), après le bloc `if (indicateurId === 'logement') { ... }`
+// Ajouter AVANT le `return header` final :
+
+  if (indicateurId === 'vivabilite') {
+    // Score quartier : seulement propreté + espaces verts (pas de criminalité/bruit/NO2)
+    const estQuartier = data.code_quartier != null
+    let html = header + `
+      <div class="popup-section-title">Environnement</div>
+      <div class="popup-grid">
+        <div class="popup-stat"><span class="popup-stat-val">${data.nb_espaces_verts ?? 0}</span><span class="popup-stat-lbl">Espaces verts</span></div>
+        <div class="popup-stat"><span class="popup-stat-val">${data.surface_totale_m2 != null ? Math.round(data.surface_totale_m2 / 10000) + ' ha' : '—'}</span><span class="popup-stat-lbl">Surface verte</span></div>
+        <div class="popup-stat"><span class="popup-stat-val">${data.nb_signalements ?? 0}</span><span class="popup-stat-lbl">Signalements</span></div>
+      </div>
+    `
+    if (!estQuartier) {
+      html += `
+        <div class="popup-divider"></div>
+        <div class="popup-section-title">Sécurité & qualité air</div>
+        <div class="popup-grid">
+          <div class="popup-stat"><span class="popup-stat-val">${data.bruit_lden_moy_db != null ? data.bruit_lden_moy_db + ' dB' : '—'}</span><span class="popup-stat-lbl">Bruit (Lden)</span></div>
+          <div class="popup-stat"><span class="popup-stat-val">${data.no2_periphe_moy != null ? data.no2_periphe_moy + ' µg' : '—'}</span><span class="popup-stat-lbl">NO2</span></div>
+        </div>
+      `
+    }
+    return html
   }
   return header
 }
