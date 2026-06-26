@@ -30,7 +30,6 @@ pointTypes: [
     { label: 'Propreté',      value: data.score_proprete },
     { label: 'Espaces verts', value: data.score_espaces_verts },
     { label: 'Criminalité',   value: data.score_criminalite },
-    { label: 'Bruit',         value: data.score_bruit },
     { label: 'NO2',           value: data.score_no2 },
   ].filter(b => b.value != null),
-}
+  }
