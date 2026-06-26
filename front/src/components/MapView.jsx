@@ -394,10 +394,7 @@ export default function MapView({
       map.current.setPaintProperty('zone-3d', 'fill-extrusion-color', colorExpr)
       map.current.setPaintProperty('zone-3d', 'fill-extrusion-height', heightExpr)
       // highlight via featureState : opacité normale sur tous
-      map.current.setPaintProperty('zone-3d', 'fill-extrusion-opacity', [
-        'case', ['boolean', ['feature-state', 'selected'], false], 1.0,
-        is3D ? 0.75 : 0.85
-      ])
+      map.current.setPaintProperty('zone-3d', 'fill-extrusion-opacity', is3D ? 0.85 : 0.9)
     } catch (error) {
       console.error("Erreur setPaintProperty:", error)
     }

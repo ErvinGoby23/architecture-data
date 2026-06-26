@@ -7,6 +7,8 @@ import './index.css'
 import RankingPanel from './components/RankingPanel'
 import ComparePanel from './components/ComparePanel'
 import BandeauLogement from './components/BandeauLogement'
+import PrixBandeau from './components/PrixBandeau'
+import './prix_bandeau.css'
 
 const SCORES_FETCHERS = {
   mobilite:     fetchScoresMobilite,
@@ -16,6 +18,7 @@ const SCORES_FETCHERS = {
 }
 
 export default function App() {
+  const [logementZone, setLogementZone] = useState({ current: null, prev: null, label: null })
   const [activeIndicateur, setActiveIndicateur] = useState(INDICATEURS[0])
   const [selected, setSelected]   = useState(null)
   const [is3D, setIs3D]           = useState(true)
@@ -24,13 +27,38 @@ export default function App() {
   )
   const [granularite, setGranularite] = useState('arrondissement')
   const [year, setYear] = useState(
-  INDICATEURS[0].hasYearFilter ? (INDICATEURS[0].defaultYear ?? 2025) : null
+    INDICATEURS[0].hasYearFilter ? (INDICATEURS[0].defaultYear ?? 2025) : null
   )
   const [refreshKey, setRefreshKey] = useState(0)
   const [scores, setScores]       = useState([])
   const [loading, setLoading]     = useState(true)
   const [compareMode, setCompareMode] = useState(false)
   const [compareList, setCompareList] = useState([])
+
+  useEffect(() => {
+    if (selected == null) {
+      setLogementZone({ current: null, prev: null, label: null })
+      return
+    }
+    const anneeLog = year ?? 2025
+    const param = granularite === 'quartier'
+      ? { granularite: 'quartier', code_quartier: selected, year: anneeLog }
+      : { granularite: 'arrondissement', arrondissement: selected, year: anneeLog }
+      
+    Promise.all([
+      fetchScoresLogement(param),
+      fetchScoresLogement({ ...param, year: anneeLog - 1 }),
+    ])
+      .then(([curRows, prevRows]) => {
+        const cur  = Array.isArray(curRows)  ? curRows[0]  ?? null : null
+        const prev = Array.isArray(prevRows) ? prevRows[0] ?? null : null
+        const label = cur
+          ? (cur.nom_quartier ?? `Paris ${cur.arrondissement ?? (cur.code_postal - 75000)}e`)
+          : null
+        setLogementZone({ current: cur, prev, label })
+      })
+      .catch(() => setLogementZone({ current: null, prev: null, label: null }))
+  }, [selected, granularite, year])
 
   useEffect(() => {
     const fetcher = SCORES_FETCHERS[activeIndicateur.id]
@@ -99,9 +127,9 @@ export default function App() {
         onSelectIndicateur={(ind) => {
           setActiveIndicateur(ind)
           setSelected(null)
-          // indicateur temporel -> année par défaut (la plus récente) ; sinon null
           setYear(ind.hasYearFilter ? (ind.defaultYear ?? 2025) : null)
-        }}        selected={selected}
+        }}        
+        selected={selected}
         scores={scores}
         visibleTypes={visibleTypes}
         onToggleType={handleToggleType}
@@ -126,6 +154,7 @@ export default function App() {
             loading={loading}
             granularite={granularite}
           />
+          
           <RankingPanel
             scores={scores}
             activeIndicateur={activeIndicateur}
@@ -133,19 +162,27 @@ export default function App() {
             onSelect={handleSelect}
             selected={selected}
           />
-        </div>
 
-        {compareMode && (
-          <ComparePanel
-            compareList={compareList}
-            scores={scores}
-            activeIndicateur={activeIndicateur}
-            granularite={granularite}
-            onRemove={(id) => setCompareList(prev => prev.filter(i => i !== id))}
-            onClear={() => { setCompareList([]); setCompareMode(false) }}
+          {/* BANDEAU PRIX — en haut centre, uniquement logement */}
+          <PrixBandeau
+            selectedData={logementZone.current}
+            prevData={logementZone.prev}
+            zoneLabel={logementZone.label}
+            year={year ?? 2025}
           />
-        )}
+
+          {compareMode && (
+            <ComparePanel
+              compareList={compareList}
+              scores={scores}
+              activeIndicateur={activeIndicateur}
+              granularite={granularite}
+              onRemove={(id) => setCompareList(prev => prev.filter(i => i !== id))}
+              onClear={() => { setCompareList([]); setCompareMode(false) }}
+            />
+          )}
+        </div>
       </div>
-    </div>
+    </div> 
   )
 }
