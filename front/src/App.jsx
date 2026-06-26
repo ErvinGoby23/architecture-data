@@ -45,7 +45,7 @@ export default function App() {
     const param = granularite === 'quartier'
       ? { granularite: 'quartier', code_quartier: selected, year: anneeLog }
       : { granularite: 'arrondissement', arrondissement: selected, year: anneeLog }
-      
+
     Promise.all([
       fetchScoresLogement(param),
       fetchScoresLogement({ ...param, year: anneeLog - 1 }),
@@ -129,7 +129,7 @@ export default function App() {
           setActiveIndicateur(ind)
           setSelected(null)
           setYear(ind.hasYearFilter ? (ind.defaultYear ?? 2025) : null)
-        }}        
+        }}
         selected={selected}
         scores={scores}
         visibleTypes={visibleTypes}
@@ -155,7 +155,7 @@ export default function App() {
             loading={loading}
             granularite={granularite}
           />
-          
+
           <RankingPanel
             scores={scores}
             activeIndicateur={activeIndicateur}
@@ -164,26 +164,25 @@ export default function App() {
             selected={selected}
           />
 
-          {/* BANDEAU PRIX — en haut centre, uniquement logement */}
           <PrixBandeau
             selectedData={logementZone.current}
             prevData={logementZone.prev}
             zoneLabel={logementZone.label}
             year={year ?? 2025}
           />
-
-          {compareMode && (
-            <ComparePanel
-              compareList={compareList}
-              scores={scores}
-              activeIndicateur={activeIndicateur}
-              granularite={granularite}
-              onRemove={(id) => setCompareList(prev => prev.filter(i => i !== id))}
-              onClear={() => { setCompareList([]); setCompareMode(false) }}
-            />
-          )}
         </div>
       </div>
-    </div> 
+
+      {compareMode && (
+        <ComparePanel
+          compareList={compareList}
+          scores={scores}
+          activeIndicateur={activeIndicateur}
+          granularite={granularite}
+          onRemove={(id) => setCompareList(prev => prev.filter(i => i !== id))}
+          onClear={() => { setCompareList([]); setCompareMode(false) }}
+        />
+      )}
+    </div>
   )
 }

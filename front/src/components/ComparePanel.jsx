@@ -120,7 +120,7 @@ export default function ComparePanel({ compareList, scores, activeIndicateur, on
       {/* Bar chart en bas, pleine largeur */}
       {zones.length >= 2 && (
         <div className="compare-radar">
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height={130}>
             <BarChart data={barData} margin={{ top: 16, right: 24, bottom: 12, left: 24 }} barCategoryGap="30%" barSize={48}>
               <XAxis
                 dataKey="label"
