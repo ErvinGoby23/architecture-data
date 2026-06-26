@@ -28,7 +28,7 @@ POSTGRES_DB=postgres
 
 docker exec -it postgres-primary psql -U postgres -c "\dt gold.*"
 
-
+docker exec -it postgres-primary psql psql -U postgres -c "DROP SCHEMA silver CASCADE; CREATE SCHEMA silver;"
 
 
 Bronze >>> EDA >>> silver (normalisation et postgress, versioning, mongodb) >>> gold(denormalisation, postgress versioning du parquet) >>> api >>> front

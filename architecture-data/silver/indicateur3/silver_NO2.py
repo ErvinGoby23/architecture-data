@@ -1,118 +1,75 @@
-"""
-silver_NO2.py — Nettoyage NO₂ tronçons Périphérique parisien
-Score de Vivabilité · Silver layer
-"""
-
 import pandas as pd
 import os
 import sys
+from datetime import datetime
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR    = os.path.abspath(os.path.join(CURRENT_DIR, '..', '..', '..'))
-BRUTE_DIR   = os.path.join(ROOT_DIR, 'architecture-data', 'brute', 'score_de_vivabilité')
-FILE        = os.path.join(BRUTE_DIR, 'NO2.csv')
+BRUTE_DIR   = os.path.join(ROOT_DIR, 'architecture-data', 'brute', 'score_de_vivabilite')
+FILE        = os.path.join(BRUTE_DIR, 'qualite-de-l-air-exposition-des-parisen-ne-s-au-no2-et-pm2-5.csv')
 
-SEUIL_OMS_ANNUEL  = 40.0   # µg/m³ moyenne annuelle
-SEUIL_OMS_HORAIRE = 200.0  # µg/m³ seuil horaire à ne pas dépasser plus de 18x/an
+SILVER_BASE = os.path.join(ROOT_DIR, 'architecture-data', 'silver', 'indicateur3', 'nettoyage-indicateur3')
+
+date_str  = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime('%Y-%m-%d')
+ANNEE_REF = 2019
+
+print(f"=== SILVER NO2 — Année : {ANNEE_REF} ===")
 
 # ==========================================================================
 # 1. LECTURE
 # ==========================================================================
-df = pd.read_csv(FILE, sep=',', engine='python')
-df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
-df['time'] = pd.to_datetime(df['time'], errors='coerce')
+df = pd.read_csv(FILE, sep=';', encoding='utf-8-sig')
+df.columns = df.columns.str.strip()
 print(f"Shape brute : {df.shape}")
-print(f"Période : {df['time'].min()} → {df['time'].max()}")
+print(f"Années disponibles : {sorted(df['Année'].dropna().unique().astype(int))}")
 
 # ==========================================================================
-# 2. NETTOYAGE
+# 2. FILTRE ANNÉE DE RÉFÉRENCE
 # ==========================================================================
-troncons = [c for c in df.columns if c != 'time']
-
-before = len(df)
-df = df.dropna(subset=['time'])
-print(f"Lignes sans timestamp supprimées : {before - len(df)}")
-
-before = len(df)
-df = df.drop_duplicates(subset=['time'])
-print(f"Doublons supprimés : {before - len(df)}")
-
-df = df.sort_values('time').reset_index(drop=True)
-
-# Interpolation linéaire des NaN (~1.1%)
-for col in troncons:
-    df[col] = pd.to_numeric(df[col], errors='coerce')
-df[troncons] = df[troncons].interpolate(method='linear', limit=3)
-
-nan_restants = df[troncons].isnull().sum().sum()
-print(f"NaN restants après interpolation : {nan_restants}")
+row = df[df['Année'] == ANNEE_REF]
+if row.empty:
+    raise ValueError(f"Année {ANNEE_REF} introuvable dans le fichier")
+row = row.iloc[0]
 
 # ==========================================================================
-# 3. AGRÉGATIONS TEMPORELLES
+# 3. EXTRACTION PAR ARRONDISSEMENT
 # ==========================================================================
-df = df.set_index('time')
+arr_cols = [c for c in df.columns if 'ardt' in c.lower() and 'NO2' in c]
+assert len(arr_cols) == 20, f"Attendu 20 colonnes arrondissement, trouvé {len(arr_cols)}"
 
-# Journalière
-df_jour = df[troncons].resample('D').mean().round(2)
-df_jour.columns = [f'{c}_no2_moy_jour' for c in df_jour.columns]
+records = []
+for i, col in enumerate(arr_cols):
+    arr_num = i + 1
+    val = row[col]
+    records.append({
+        'arrondissement'          : arr_num,
+        'nb_personnes_exposees_no2': float(val) if pd.notna(val) else None,
+        'annee'                   : ANNEE_REF,
+    })
 
-# Mensuelle
-df_mois = df[troncons].resample('ME').mean().round(2)
-df_mois.columns = [f'{c}_no2_moy_mois' for c in df_mois.columns]
+df_no2 = pd.DataFrame(records)
 
-# Horaire (profil moyen par heure)
-df_heure = df.copy()
-df_heure['heure'] = df_heure.index.hour
-df_profil = df_heure.groupby('heure')[troncons].mean().round(2).reset_index()
+# Vérification complétude
+nb_null = df_no2['nb_personnes_exposees_no2'].isna().sum()
+print(f"Arrondissements renseignés : {20 - nb_null}/20")
+if nb_null > 0:
+    print(f"Arrondissements manquants : {df_no2[df_no2['nb_personnes_exposees_no2'].isna()]['arrondissement'].tolist()}")
 
-# Annuelle + dépassements seuil OMS
-df_annee = df[troncons].resample('YE').agg(
-    ['mean', 'max', 'std']
-).round(2)
-df_annee.columns = [f'{col}_{stat}' for col, stat in df_annee.columns]
+# Métrique globale (pour compatibilité fusion)
+global_val = row['Nbre Parisiens soumis à dépassement VR NO2']
+df_no2['no2_global_nb_exposes'] = float(global_val) if pd.notna(global_val) else None
 
-# Score de dépassement OMS : % d'heures > 40 µg/m³ par tronçon
-pct_oms = (df[troncons] > SEUIL_OMS_ANNUEL).mean() * 100
-nb_pics = (df[troncons] > SEUIL_OMS_HORAIRE).sum()
-
-print(f"\nShape horaire brute : {df.shape}")
-print(f"Shape journalière   : {df_jour.shape}")
-print(f"Shape mensuelle     : {df_mois.shape}")
-print(f"\n% mesures > seuil OMS 40 µg/m³ par tronçon :")
-print(pct_oms.round(2).to_string())
-print(f"\nNb pics horaires > 200 µg/m³ :")
-print(nb_pics.to_string())
-
-# Résumé global (pas d'arrondissement pour NO2 — données Périphérique)
-df_resume = pd.DataFrame({
-    'troncon'            : troncons,
-    'no2_moy_µg_m3'     : df[troncons].mean().round(2).values,
-    'no2_max_µg_m3'     : df[troncons].max().round(2).values,
-    'pct_heures_oms'    : pct_oms.round(2).values,
-    'nb_pics_horaires'  : nb_pics.values,
-    'seuil_oms_depasse' : (df[troncons].mean() > SEUIL_OMS_ANNUEL).values,
-})
-print(f"\nRésumé par tronçon :")
-print(df_resume.to_string(index=False))
+print(f"\nAperçu :")
+print(df_no2.to_string(index=False))
 
 # ==========================================================================
 # 4. EXPORT PARQUET
 # ==========================================================================
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR    = os.path.abspath(os.path.join(CURRENT_DIR, '..', '..', '..'))
-BRUTE_DIR   = os.path.join(ROOT_DIR, 'architecture-data', 'brute', 'score_de_vivabilité')
-output_dir = os.path.join(ROOT_DIR, 'architecture-data', 'silver', 'vivabilite', 'nettoyage-vivabilite')
+output_dir = os.path.join(SILVER_BASE, date_str)
 os.makedirs(output_dir, exist_ok=True)
 
-df.reset_index().to_parquet(os.path.join(output_dir, 'NO2_horaire_silver.parquet'),   index=False)
-df_jour.reset_index().to_parquet(os.path.join(output_dir, 'NO2_journalier_silver.parquet'), index=False)
-df_mois.reset_index().to_parquet(os.path.join(output_dir, 'NO2_mensuel_silver.parquet'),    index=False)
-df_profil.to_parquet(os.path.join(output_dir, 'NO2_profil_horaire_silver.parquet'),         index=False)
-df_resume.to_parquet(os.path.join(output_dir, 'NO2_resume_silver.parquet'),                 index=False)
+out = os.path.join(output_dir, 'NO2_silver.parquet')
+df_no2.to_parquet(out, index=False)
 
-print(f"\n✓ Parquets NO2 créés dans : {output_dir}/")
-print(f"  - NO2_horaire_silver.parquet      ({df.shape[0]:,} lignes)")
-print(f"  - NO2_journalier_silver.parquet   ({df_jour.shape[0]:,} lignes)")
-print(f"  - NO2_mensuel_silver.parquet      ({df_mois.shape[0]:,} lignes)")
-print(f"  - NO2_profil_horaire_silver.parquet (24 lignes)")
-print(f"  - NO2_resume_silver.parquet       ({len(df_resume)} tronçons)")
+print(f"\nParquet : {out}  ({len(df_no2)} arrondissements)")
+print(f"Colonnes  : {list(df_no2.columns)}")

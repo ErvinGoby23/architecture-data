@@ -1,268 +1,270 @@
 """
-silver_fusion_vivabilite.py — Fusion Score de Vivabilité (par arrondissement)
-Urban Data Explorer · Silver layer
+silver_fusion_vivabilite.py — Pipeline Silver · Indicateur 3 : Vivabilité (Fusion)
+Urban Data Explorer — Granularité : ARRONDISSEMENT + QUARTIER
+Le Silver fusionne les données brutes — AUCUN calcul de score ici (appartient au Gold).
 """
 
+import math
 import pandas as pd
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
-from pymongo import MongoClient
+from pymongo import MongoClient, GEOSPHERE
 
 load_dotenv('../../../.env')
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-ROOT_DIR    = os.path.abspath(os.path.join(CURRENT_DIR, '..', '..', '..'))
-SILVER_DIR  = os.path.join(ROOT_DIR, 'architecture-data', 'silver', 'vivabilite', 'nettoyage-vivabilite')
-os.makedirs(SILVER_DIR, exist_ok=True)
+SILVER_BASE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', '..', '..',
+    'architecture-data', 'silver', 'indicateur3', 'nettoyage-indicateur3'
+)
 
-print("=== EXÉCUTION DU SCRIPT SILVER FUSION VIVABILITÉ ===")
+def get_latest_date(silver_dir):
+    dates = sorted([
+        d for d in os.listdir(silver_dir)
+        if os.path.isdir(os.path.join(silver_dir, d))
+    ], reverse=True)
+    if not dates:
+        raise FileNotFoundError(f"Aucun dossier trouvé dans {silver_dir}")
+    return dates[0]
+
+date_str = sys.argv[1] if len(sys.argv) > 1 else get_latest_date(SILVER_BASE)
+print(f"=== SILVER FUSION (IND3) — date : {date_str} ===")
+
+SILVER_DIR = os.path.join(SILVER_BASE, date_str)
+os.makedirs(SILVER_DIR, exist_ok=True)
 
 PG_URL    = os.getenv('PG_URL')
 MONGO_URL = os.getenv('MONGO_URL')
 MONGO_DB  = 'silver'
 
 # ==========================================================================
-# 1. LECTURE DES PARQUETS SILVER
+# 1. CHARGEMENT + VALIDATION INTÉGRITÉ
 # ==========================================================================
-print("\n--- CHARGEMENT DES DONNÉES SILVER ---")
+print("\n--- CHARGEMENT ---")
+df_criminalite = pd.read_parquet(os.path.join(SILVER_DIR, 'criminalite_silver.parquet'))
+df_proprete    = pd.read_parquet(os.path.join(SILVER_DIR, 'proprete_silver.parquet'))
+df_proprete_qu = pd.read_parquet(os.path.join(SILVER_DIR, 'proprete_quartier_silver.parquet'))
+df_espaces     = pd.read_parquet(os.path.join(SILVER_DIR, 'espaces_verts_silver.parquet'))
+df_espaces_qu  = pd.read_parquet(os.path.join(SILVER_DIR, 'espaces_verts_quartier_silver.parquet'))
+df_no2         = pd.read_parquet(os.path.join(SILVER_DIR, 'NO2_silver.parquet'))
 
-df_criminalite  = pd.read_parquet(f'{SILVER_DIR}/criminalite_pivot_silver.parquet')
-df_proprete     = pd.read_parquet(f'{SILVER_DIR}/proprete_agrege_silver.parquet')
-df_espaces      = pd.read_parquet(f'{SILVER_DIR}/espaces_verts_agrege_silver.parquet')
-df_bruit        = pd.read_parquet(f'{SILVER_DIR}/bruit_agrege_silver.parquet')
-df_no2          = pd.read_parquet(f'{SILVER_DIR}/NO2_resume_silver.parquet')
+print(f"Criminalite   : {df_criminalite.shape}")
+print(f"Proprete arr. : {df_proprete.shape}")
+print(f"Proprete qtr. : {df_proprete_qu.shape}")
+print(f"Espaces arr.  : {df_espaces.shape}")
+print(f"Espaces qtr.  : {df_espaces_qu.shape}")
+print(f"NO2           : {df_no2.shape}")
 
-print(f"Criminalité  (arrondissements) : {df_criminalite.shape}")
-print(f"Propreté     (arrondissements) : {df_proprete.shape}")
-print(f"Espaces verts(arrondissements) : {df_espaces.shape}")
-print(f"Bruit        (agrégé annuel)   : {df_bruit.shape}")
-print(f"NO2          (tronçons)        : {df_no2.shape}")
+assert df_proprete['arrondissement'].is_unique,    "DOUBLON arrondissement dans proprete_silver"
+assert df_proprete_qu['code_quartier'].is_unique,  "DOUBLON code_quartier dans proprete_quartier_silver"
+assert df_espaces['arrondissement'].is_unique,     "DOUBLON arrondissement dans espaces_verts_silver"
+assert df_espaces_qu['code_quartier'].is_unique,   "DOUBLON code_quartier dans espaces_verts_quartier_silver"
+assert df_criminalite['arrondissement'].is_unique, "DOUBLON arrondissement dans criminalite_silver"
+assert df_no2['arrondissement'].is_unique,         "DOUBLON arrondissement dans NO2_silver"
+print("Integrite des parquets entrants OK")
 
 # ==========================================================================
-# 2. PRÉPARATION — colonnes sélectionnées pour la fusion
+# 2. PRÉPARATION COLONNES BRUTES
 # ==========================================================================
-
-# Criminalité → taux moyens par indicateur par arrondissement
 cols_crim = ['arrondissement', 'insee_pop'] + [c for c in df_criminalite.columns if c.startswith('taux_')]
 df_crim_s = df_criminalite[[c for c in cols_crim if c in df_criminalite.columns]].copy()
 
-# Propreté → nb signalements + score pondéré
-cols_prop = ['arrondissement', 'nb_signalements', 'score_poids_total', 'poids_moyen']
+cols_prop = ['arrondissement', 'nb_signalements']
 df_prop_s = df_proprete[[c for c in cols_prop if c in df_proprete.columns]].copy()
 
-# Espaces verts → surface totale + nb espaces
 cols_ev = ['arrondissement', 'nb_espaces_verts']
 if 'surface_totale_m2' in df_espaces.columns:
     cols_ev += ['surface_totale_m2', 'surface_moy_m2', 'nb_grands_espaces']
 df_ev_s = df_espaces[[c for c in cols_ev if c in df_espaces.columns]].copy()
 
-# Bruit → moyenne Lden et Ln (dernière année disponible)
-lden_row = df_bruit[(df_bruit['type'] == 'Lden')].sort_values('annee', ascending=False).head(1)
-ln_row   = df_bruit[(df_bruit['type'] == 'Ln')  ].sort_values('annee', ascending=False).head(1)
-bruit_lden_moy = lden_row['valeur_moy'].values[0] if len(lden_row) else None
-bruit_ln_moy   = ln_row['valeur_moy'].values[0]   if len(ln_row)   else None
-print(f"\nBruit dernière année — Lden moyen : {bruit_lden_moy} dB | Ln moyen : {bruit_ln_moy} dB")
-
-# NO2 → moyenne globale Périphérique (pas d'arrondissement)
-no2_global_moy = df_no2['no2_moy_µg_m3'].mean().round(2)
-no2_seuil_pct  = df_no2['pct_heures_oms'].mean().round(2)
-print(f"NO2 Périphérique — moy : {no2_global_moy} µg/m³ | % > OMS : {no2_seuil_pct}%")
+cols_no2 = ['arrondissement', 'nb_personnes_exposees_no2']
+df_no2_s = df_no2[[c for c in cols_no2 if c in df_no2.columns]].copy()
+print(f"\nNO2 2019 — apercu : {df_no2_s['nb_personnes_exposees_no2'].describe().to_dict()}")
 
 # ==========================================================================
-# 3. FUSION PAR ARRONDISSEMENT
+# 3. FUSION ARRONDISSEMENT — données brutes uniquement
 # ==========================================================================
-print("\n--- FUSION PAR ARRONDISSEMENT ---")
-
-# Base : arrondissements 1–20
+print("\n--- FUSION ARRONDISSEMENT ---")
 df_fusion = pd.DataFrame({'arrondissement': range(1, 21)})
-
-df_fusion = df_fusion.merge(df_crim_s, on='arrondissement', how='left')
-df_fusion = df_fusion.merge(df_prop_s, on='arrondissement', how='left')
-df_fusion = df_fusion.merge(df_ev_s,   on='arrondissement', how='left')
-
-# Bruit et NO2 : valeurs globales répétées sur tous les arrondissements
-df_fusion['bruit_lden_moy_db']   = bruit_lden_moy
-df_fusion['bruit_ln_moy_db']     = bruit_ln_moy
-df_fusion['no2_periphe_moy']     = no2_global_moy
-df_fusion['no2_periphe_pct_oms'] = no2_seuil_pct
-
-df_fusion = df_fusion.fillna(0)
-df_fusion = df_fusion.sort_values('arrondissement').reset_index(drop=True)
-
-print(f"Shape fusion finale : {df_fusion.shape}")
-print(f"Arrondissements couverts : {df_fusion['arrondissement'].nunique()}")
+df_fusion = df_fusion.merge(df_crim_s,  on='arrondissement', how='left')
+df_fusion = df_fusion.merge(df_prop_s,  on='arrondissement', how='left')
+df_fusion = df_fusion.merge(df_ev_s,    on='arrondissement', how='left')
+df_fusion = df_fusion.merge(df_no2_s,   on='arrondissement', how='left')
+df_fusion = df_fusion.fillna(0).sort_values('arrondissement').reset_index(drop=True)
+assert len(df_fusion) == 20, f"Fusion arrondissement : {len(df_fusion)} lignes attendues 20"
+print(f"Shape fusion arrondissement : {df_fusion.shape}")
+print(f"Colonnes : {list(df_fusion.columns)}")
 
 # ==========================================================================
-# 4. CALCUL SCORE VIVABILITÉ (normalisé 0–100)
+# 4. FUSION QUARTIER — données brutes uniquement
 # ==========================================================================
-print("\n--- CALCUL SCORE VIVABILITÉ ---")
+print("\n--- FUSION QUARTIER ---")
+ref_qu = df_proprete_qu[['code_quartier', 'nom_quartier', 'arrondissement']].drop_duplicates('code_quartier').copy()
 
-def minmax(series, inverse=False):
-    """Normalise une série entre 0 et 100. inverse=True si valeur haute = mauvais."""
-    mn, mx = series.min(), series.max()
-    if mx == mn:
-        return pd.Series([50.0] * len(series), index=series.index)
-    norm = (series - mn) / (mx - mn) * 100
-    return 100 - norm if inverse else norm
+cols_prop_qu = ['code_quartier', 'nb_signalements']
+df_prop_qu_s = df_proprete_qu[[c for c in cols_prop_qu if c in df_proprete_qu.columns]].copy()
 
-# Score propreté : inverse (plus de signalements = moins propre)
-if 'score_poids_total' in df_fusion.columns:
-    df_fusion['score_proprete'] = minmax(df_fusion['score_poids_total'], inverse=True).round(2)
+cols_ev_qu = ['code_quartier', 'nb_espaces_verts']
+if 'surface_totale_m2' in df_espaces_qu.columns:
+    cols_ev_qu += ['surface_totale_m2', 'surface_moy_m2', 'nb_grands_espaces']
+df_ev_qu_s = df_espaces_qu[[c for c in cols_ev_qu if c in df_espaces_qu.columns]].copy()
 
-# Score espaces verts : surface totale (direct)
-if 'surface_totale_m2' in df_fusion.columns:
-    df_fusion['score_espaces_verts'] = minmax(df_fusion['surface_totale_m2']).round(2)
-elif 'nb_espaces_verts' in df_fusion.columns:
-    df_fusion['score_espaces_verts'] = minmax(df_fusion['nb_espaces_verts']).round(2)
-
-# Score criminalité : taux moyen global (inverse)
-taux_cols = [c for c in df_fusion.columns if c.startswith('taux_')]
-if taux_cols:
-    df_fusion['taux_crime_global'] = df_fusion[taux_cols].mean(axis=1)
-    df_fusion['score_criminalite'] = minmax(df_fusion['taux_crime_global'], inverse=True).round(2)
-
-# Score bruit : constant (pas de variation par arrondissement dans ce dataset)
-df_fusion['score_bruit'] = max(0, 100 - max(0, bruit_lden_moy - 50) * 3.33) if bruit_lden_moy else 50.0
-
-# Score NO2 : constant (Périphérique, pas par arrondissement)
-df_fusion['score_no2'] = max(0, 100 - no2_seuil_pct) if no2_seuil_pct else 50.0
-
-# Score global vivabilité (moyenne pondérée)
-score_cols_weights = {
-    'score_proprete'      : 0.30,
-    'score_espaces_verts' : 0.25,
-    'score_criminalite'   : 0.25,
-    'score_bruit'         : 0.10,
-    'score_no2'           : 0.10,
-}
-available = {k: v for k, v in score_cols_weights.items() if k in df_fusion.columns}
-total_weight = sum(available.values())
-
-df_fusion['score_vivabilite'] = sum(
-    df_fusion[col] * (w / total_weight)
-    for col, w in available.items()
-).round(2)
-
-score_preview = df_fusion[['arrondissement', 'score_vivabilite'] + list(available.keys())].copy()
-print(score_preview.to_string(index=False))
+df_fusion_qu = ref_qu.copy()
+df_fusion_qu = df_fusion_qu.merge(df_prop_qu_s, on='code_quartier', how='left')
+df_fusion_qu = df_fusion_qu.merge(df_ev_qu_s,   on='code_quartier', how='left')
+df_fusion_qu = df_fusion_qu.fillna(0).sort_values('code_quartier').reset_index(drop=True)
+print(f"Shape fusion quartier : {df_fusion_qu.shape}")
+print(f"Quartiers uniques     : {df_fusion_qu['code_quartier'].nunique()}")
+assert len(df_fusion_qu) == df_fusion_qu['code_quartier'].nunique(), \
+    f"Doublons détectés après fusion quartier : {len(df_fusion_qu)} lignes / {df_fusion_qu['code_quartier'].nunique()} uniques"
 
 # ==========================================================================
-# 5. EXPORTS PARQUET
+# 5. EXPORT PARQUET versionné
 # ==========================================================================
-out_fusion = os.path.join(SILVER_DIR, 'vivabilite_arrondissement_silver.parquet')
-df_fusion.to_parquet(out_fusion, index=False)
-print(f"\n✓ Parquet fusion : {out_fusion}")
+parquet_arr = os.path.join(SILVER_DIR, 'indicateur_vivabilite_silver.parquet')
+parquet_qu  = os.path.join(SILVER_DIR, 'indicateur_vivabilite_quartier_silver.parquet')
+df_fusion.to_parquet(parquet_arr, index=False)
+df_fusion_qu.to_parquet(parquet_qu, index=False)
+print(f"\nParquet arrondissement : {parquet_arr}  ({len(df_fusion)} lignes)")
+print(f"Parquet quartier       : {parquet_qu}  ({len(df_fusion_qu)} lignes)")
 
 # ==========================================================================
-# 6. POSTGRESQL
+# 6. POSTGRESQL — 2 tables silver (données brutes)
 # ==========================================================================
 try:
     engine = create_engine(PG_URL)
     with engine.connect() as conn:
-        conn.execute(text("CREATE SCHEMA IF NOT EXISTS silver;"))
-        conn.execute(text("DROP TABLE IF EXISTS silver.indicateur_vivabilite_arrondissement CASCADE;"))
+        conn.execute(text('CREATE SCHEMA IF NOT EXISTS silver;'))
+        conn.execute(text('DROP TABLE IF EXISTS silver.indicateur_vivabilite CASCADE;'))
+        conn.execute(text('DROP TABLE IF EXISTS silver.indicateur_vivabilite_quartier CASCADE;'))
         conn.commit()
 
-    df_pg = df_fusion.copy()
-    df_pg.to_sql('indicateur_vivabilite_arrondissement', engine,
-                 if_exists='replace', index=False, schema='silver')
+    df_fusion.to_sql('indicateur_vivabilite', engine, if_exists='replace', index=False, schema='silver')
     with engine.connect() as conn:
-        conn.execute(text("ALTER TABLE silver.indicateur_vivabilite_arrondissement ADD PRIMARY KEY (arrondissement)"))
+        conn.execute(text("ALTER TABLE silver.indicateur_vivabilite ADD PRIMARY KEY (arrondissement)"))
         conn.commit()
+    print(f"PostgreSQL : silver.indicateur_vivabilite ({len(df_fusion)} lignes)")
 
-    print(f"✓ PostgreSQL : silver.indicateur_vivabilite_arrondissement ({len(df_pg)} lignes)")
+    df_fusion_qu.to_sql('indicateur_vivabilite_quartier', engine, if_exists='replace', index=False, schema='silver')
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE silver.indicateur_vivabilite_quartier ADD PRIMARY KEY (code_quartier)"))
+        conn.commit()
+    print(f"PostgreSQL : silver.indicateur_vivabilite_quartier ({len(df_fusion_qu)} lignes)")
 except Exception as e:
-    print(f"❌ PostgreSQL indisponible : {e}")
+    print(f"PostgreSQL indisponible : {e}")
 
 # ==========================================================================
-# 7. MONGODB
+# 7. MONGODB — espaces verts + signalements propreté
 # ==========================================================================
-print("\n--- INSERTION DANS MONGODB ---")
 try:
+    import geopandas as gpd
+    from shapely.geometry import Point
+
     client = MongoClient(MONGO_URL)
     mongo  = client[MONGO_DB]
     mongo['indicateur_vivabilite'].drop()
 
-    docs = df_fusion.to_dict(orient='records')
-    for doc in docs:
-        # Conversion numpy types → python natifs
-        for k, v in doc.items():
-            if hasattr(v, 'item'):
-                doc[k] = v.item()
+    print("\n--- TRAITEMENT SPATIAL ---")
+    url_arrondissements = "https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/arrondissements/exports/geojson"
+    gdf_paris = gpd.read_file(url_arrondissements)
+    if 'c_ar' in gdf_paris.columns:
+        gdf_paris['true_arr'] = gdf_paris['c_ar'].astype(int)
+    else:
+        gdf_paris['true_arr'] = gdf_paris['c_arinsee'].astype(int) % 100
 
-    mongo['indicateur_vivabilite'].insert_many(docs)
-    mongo['indicateur_vivabilite'].create_index([("arrondissement", 1)], unique=True)
-    print(f"✓ MongoDB : {len(docs)} documents insérés (collection indicateur_vivabilite)")
-    print("✓ MongoDB : Index arrondissement créé")
+    def purge_nan(df_in):
+        df_out = df_in.copy()
+        for col in df_out.select_dtypes(include="float").columns:
+            df_out[col] = df_out[col].astype(object).where(
+                df_out[col].notna() & df_out[col].apply(
+                    lambda x: not (isinstance(x, float) and math.isinf(x))
+                ),
+                other=None,
+            )
+        return df_out
+
+    def to_geo_docs(df_in, type_label, cols_props):
+        df_g = df_in.dropna(subset=['latitude', 'longitude']).copy()
+        geometry = [Point(xy) for xy in zip(df_g['longitude'], df_g['latitude'])]
+        gdf_points = gpd.GeoDataFrame(df_g, geometry=geometry, crs="EPSG:4326")
+        gdf_joined = gpd.sjoin(gdf_points, gdf_paris[['true_arr', 'geometry']], how='left', predicate='within')
+        gdf_joined['arrondissement'] = gdf_joined['true_arr']
+        df_clean = pd.DataFrame(gdf_joined.drop(columns=['geometry', 'index_right', 'true_arr']))
+        df_clean = purge_nan(df_clean)
+        df_clean['geo'] = [
+            {'type': 'Point', 'coordinates': [float(lon), float(lat)]}
+            for lon, lat in zip(df_clean['longitude'], df_clean['latitude'])
+        ]
+        df_clean['type'] = type_label
+        df_clean['code_quartier'] = df_clean['code_quartier'].apply(lambda x: int(x) if pd.notna(x) else None)
+        df_clean = df_clean.dropna(subset=['arrondissement'])
+        df_clean['arrondissement'] = df_clean['arrondissement'].astype(int)
+        keep = ['type', 'arrondissement', 'code_quartier', 'nom_quartier', 'geo'] + cols_props
+        return df_clean[[c for c in keep if c in df_clean.columns]].to_dict(orient='records')
+
+    def to_geo_docs_proprete(df_in, cols_props):
+        df_g = df_in.dropna(subset=['latitude', 'longitude']).copy()
+        geometry = [Point(xy) for xy in zip(df_g['longitude'], df_g['latitude'])]
+        gdf_points = gpd.GeoDataFrame(df_g, geometry=geometry, crs="EPSG:4326")
+        gdf_joined = gpd.sjoin(gdf_points, gdf_paris[['true_arr', 'geometry']], how='left', predicate='within')
+        gdf_joined['arrondissement'] = gdf_joined['true_arr']
+        df_clean = pd.DataFrame(gdf_joined.drop(columns=['geometry', 'index_right', 'true_arr']))
+        df_clean = purge_nan(df_clean)
+        df_clean['geo'] = [
+            {'type': 'Point', 'coordinates': [float(lon), float(lat)]}
+            for lon, lat in zip(df_clean['longitude'], df_clean['latitude'])
+        ]
+        df_clean['type'] = df_clean['type_declaration'].fillna('signalement')
+        df_clean['code_quartier'] = df_clean['code_quartier'].apply(lambda x: int(x) if pd.notna(x) else None)
+        df_clean = df_clean.dropna(subset=['arrondissement'])
+        df_clean['arrondissement'] = df_clean['arrondissement'].astype(int)
+        keep = ['type', 'arrondissement', 'code_quartier', 'nom_quartier', 'geo'] + cols_props
+        return df_clean[[c for c in keep if c in df_clean.columns]].to_dict(orient='records')
+
+    def insert_chunk(chunk):
+        if chunk:
+            mongo['indicateur_vivabilite'].insert_many(chunk, ordered=False)
+
+    all_docs = []
+
+    ev_path = os.path.join(SILVER_DIR, 'espaces_verts_long_silver.parquet')
+    if os.path.exists(ev_path):
+        df_ev_long = pd.read_parquet(ev_path)
+        docs_ev = to_geo_docs(df_ev_long, 'espace_vert', ['nom', 'type_espace_vert', 'surface_m2'])
+        all_docs.extend(docs_ev)
+        print(f"  Espaces verts : {len(docs_ev):,} docs")
+
+    prop_path = os.path.join(SILVER_DIR, 'proprete_long_silver.parquet')
+    if os.path.exists(prop_path):
+        df_prop_long = pd.read_parquet(prop_path)
+        if len(df_prop_long) > 20000:
+            df_prop_long = df_prop_long.sample(n=20000, random_state=42)
+        types_distincts = sorted(df_prop_long['type_declaration'].dropna().unique())
+        print(f"  Types signalements dans Mongo : {types_distincts}")
+        docs_prop = to_geo_docs_proprete(df_prop_long, ['id_declaration', 'type_declaration', 'mois'])
+        all_docs.extend(docs_prop)
+        print(f"  Signalements (echantillonnes) : {len(docs_prop):,} docs")
+
+    if all_docs:
+        print(f"\n--- INSERTION MULTI-THREADEE ({len(all_docs):,} documents) ---")
+        chunk_size = 500
+        chunks = [all_docs[i:i+chunk_size] for i in range(0, len(all_docs), chunk_size)]
+        with ThreadPoolExecutor(max_workers=min(len(chunks), 4)) as executor:
+            futures = [executor.submit(insert_chunk, chunk) for chunk in chunks]
+            for f in futures:
+                f.result()
+
+        mongo['indicateur_vivabilite'].create_index([("geo", GEOSPHERE)])
+        mongo['indicateur_vivabilite'].create_index([("code_quartier", 1)])
+        mongo['indicateur_vivabilite'].create_index([("arrondissement", 1)])
+        mongo['indicateur_vivabilite'].create_index([("type", 1)])
+        print(f"MongoDB : Importation reussie et index crees.")
+
 except Exception as e:
-    print(f"❌ MongoDB indisponible : {e}")
+    print(f"MongoDB indisponible ou erreur traitement : {e}")
 
-# ==========================================================================
-# 8. MONGODB — POINTS GÉOSPATIAUX (propreté + espaces verts)
-# ==========================================================================
-print("\n--- INSERTION DES POINTS GÉO DANS MONGODB ---")
-try:
-    client = MongoClient(MONGO_URL)
-    mongo  = client[MONGO_DB]
-    mongo['indicateur_vivabilite_geo'].drop()
-
-    docs_geo = []
-
-    # --- Propreté : 1 doc par signalement avec lat/lon ---
-    df_prop_long = pd.read_parquet(os.path.join(SILVER_DIR, 'proprete_long_silver.parquet'))
-    df_prop_geo  = df_prop_long.dropna(subset=['latitude', 'longitude']).copy()
-
-    for _, r in df_prop_geo.iterrows():
-        docs_geo.append({
-            'type'            : 'signalement',
-            'arrondissement'  : int(r['arrondissement']) if pd.notna(r.get('arrondissement')) else None,
-            'type_declaration': r.get('type_declaration', ''),
-            'poids'           : int(r.get('poids', 1)),
-            'geo'             : {
-                'type'       : 'Point',
-                'coordinates': [float(r['longitude']), float(r['latitude'])],
-            },
-        })
-
-    print(f"  Signalements propreté : {len(docs_geo):,}")
-
-    # --- Espaces verts : 1 doc par espace avec lat/lon ---
-    df_ev_long = pd.read_parquet(os.path.join(SILVER_DIR, 'espaces_verts_long_silver.parquet'))
-    df_ev_geo  = df_ev_long.dropna(subset=['latitude', 'longitude']).copy()
-
-    ev_docs = []
-    for _, r in df_ev_geo.iterrows():
-        ev_docs.append({
-            'type'            : 'espace_vert',
-            'arrondissement'  : int(r['arrondissement']) if pd.notna(r.get('arrondissement')) else None,
-            'nom'             : r.get('nom', ''),
-            'type_espace_vert': r.get('type_espace_vert', ''),
-            'surface_m2'      : float(r['surface_m2']) if pd.notna(r.get('surface_m2')) else None,
-            'geo'             : {
-                'type'       : 'Point',
-                'coordinates': [float(r['longitude']), float(r['latitude'])],
-            },
-        })
-
-    print(f"  Espaces verts : {len(ev_docs):,}")
-    docs_geo += ev_docs
-
-    # Insertion par batch de 10 000 pour éviter les timeouts
-    batch_size = 10_000
-    for i in range(0, len(docs_geo), batch_size):
-        mongo['indicateur_vivabilite_geo'].insert_many(docs_geo[i:i+batch_size], ordered=False)
-
-    from pymongo import GEOSPHERE
-    mongo['indicateur_vivabilite_geo'].create_index([("geo", GEOSPHERE)])
-    mongo['indicateur_vivabilite_geo'].create_index([("arrondissement", 1)])
-    mongo['indicateur_vivabilite_geo'].create_index([("type", 1)])
-
-    print(f"✓ MongoDB : {len(docs_geo):,} documents insérés (collection indicateur_vivabilite_geo)")
-    print("✓ MongoDB : Index 2dsphere + arrondissement + type créés")
-except Exception as e:
-    print(f"❌ MongoDB GeoJSON indisponible : {e}")
-
-print("\n=== SILVER vivabilité OK ===")
-print(f"Colonnes finales ({len(df_fusion.columns)}) : {list(df_fusion.columns)}")
+print('\n=== SILVER VIVABILITE OK ===')
+print(f"Arrondissement — {len(df_fusion)} lignes, {len(df_fusion.columns)} colonnes")
+print(f"Quartier       — {len(df_fusion_qu)} lignes, {len(df_fusion_qu.columns)} colonnes")
