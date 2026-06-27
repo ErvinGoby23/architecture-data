@@ -31,10 +31,10 @@ QUERIES = {
     "select_all_services_quartier":     "SELECT * FROM gold.score_services_quartier ORDER BY rang",
     "filter_by_arrondissement":         "SELECT * FROM gold.score_mobilite_arrondissement WHERE arrondissement = 1",
     "top5_mobilite":                    "SELECT arrondissement, score_mobilite_100, rang FROM gold.score_mobilite_arrondissement ORDER BY rang LIMIT 5",
-    "top5_connectivite":                "SELECT code_postal, score_connectivite_100, rang FROM gold.score_connectivite ORDER BY rang LIMIT 5",
+    "top5_connectivite":                "SELECT arrondissement, score_connectivite_100, rang FROM gold.score_connectivite ORDER BY rang LIMIT 5",
+    "select_all_silver_connectivite":   "SELECT * FROM silver.indicateur_connectivite ORDER BY arrondissement",
     "top5_services":                    "SELECT code_postal, score_services_100, rang FROM gold.score_services ORDER BY rang LIMIT 5",
     "select_all_silver_mobilite":       "SELECT * FROM silver.indicateur_mobilite_arrondissement ORDER BY arrondissement",
-    "select_all_silver_connectivite":   "SELECT * FROM silver.indicateur_connectivite ORDER BY code_postal",
 }
 
 def run_query(query_name: str, sql: str, engine) -> dict:

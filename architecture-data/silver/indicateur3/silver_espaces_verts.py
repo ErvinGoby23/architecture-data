@@ -35,9 +35,9 @@ print(f"Shape brute : {df.shape}")
 # 2. NETTOYAGE
 # ==========================================================================
 df['ARRONDISSEMENT'] = pd.to_numeric(df['ARRONDISSEMENT'], errors='coerce').astype('Int64')
-df['ARRONDISSEMENT'] = df['ARRONDISSEMENT'].apply(
-    lambda x: x - 75000 if pd.notna(x) and 75001 <= x <= 75020 else pd.NA
-).astype('Int64')
+mask = df['ARRONDISSEMENT'].between(75001, 75020)
+df['ARRONDISSEMENT'] = df['ARRONDISSEMENT'].where(~mask, df['ARRONDISSEMENT'] - 75000)
+df['ARRONDISSEMENT'] = df['ARRONDISSEMENT'].where(df['ARRONDISSEMENT'].between(1, 20), pd.NA).astype('Int64')
 
 coords = df['geo_point_2d'].str.split(',', expand=True)
 df['latitude']  = pd.to_numeric(coords[0], errors='coerce')

@@ -1,8 +1,3 @@
-"""
-gold_score_mobilite.py — Pipeline Gold · Indicateur 1 : Score de Mobilité
-Urban Data Explorer — Granularité : QUARTIER + ARRONDISSEMENT
-"""
-
 import pandas as pd
 import numpy as np
 import os
@@ -40,9 +35,9 @@ PG_URL = os.getenv('PG_URL')
 os.makedirs(GOLD_DIR, exist_ok=True)
 
 
-# ==========================================================================
+
 # FONCTIONS COMMUNES
-# ==========================================================================
+
 
 def normalize(series):
     """Normalisation min-max → [0, 1]"""
@@ -126,9 +121,9 @@ def exporter(df_gold, table_name, pk_col, parquet_path, engine):
         print(f'❌ PostgreSQL indisponible pour {table_name} : {e}')
 
 
-# ==========================================================================
+
 # LECTURE SURFACE — QUARTIERS
-# ==========================================================================
+
 csv_quartiers = os.path.join(BRUTE_DIR, 'quartiers.csv')
 df_qu_ref = pd.read_csv(csv_quartiers, sep=';')
 df_qu_ref.columns = df_qu_ref.columns.str.strip()
@@ -155,9 +150,9 @@ except Exception as e:
     print(f'⚠️ Moteur PostgreSQL non initialisé : {e}')
 
 
-# ==========================================================================
+
 # BLOC 1 — SCORE PAR QUARTIER (80 quartiers)
-# ==========================================================================
+
 print("\n--- GOLD QUARTIER ---")
 
 silver_qu_path = os.path.join(SILVER_DIR, 'indicateur_mobilite_quartier_silver.parquet')
@@ -209,9 +204,9 @@ exporter(
 )
 
 
-# ==========================================================================
+
 # BLOC 2 — SCORE PAR ARRONDISSEMENT (20 arrondissements)
-# ==========================================================================
+
 print("\n--- GOLD ARRONDISSEMENT ---")
 
 silver_arr_path = os.path.join(SILVER_DIR, 'indicateur_mobilite_arrondissement_silver.parquet')

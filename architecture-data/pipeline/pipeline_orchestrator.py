@@ -65,10 +65,10 @@ def check_pg_replica(logger) -> bool:
         return False
 
 
-# ==========================================================================
+
 # INDICATEUR 1 — Mobilité
 # Bronze fetch → Silver (3 scripts en //) → Fusion → Gold
-# ==========================================================================
+
 
 @task(name="Bronze - Fetch stationnement", retries=2, retry_delay_seconds=60)
 def run_bronze_stationnement(date_str: str):
@@ -133,10 +133,10 @@ def run_gold_mobilite(date_str: str):
         return None
 
 
-# ==========================================================================
+
 # INDICATEUR 2 — Connectivité
 # Bronze fetch → Silver (2 scripts en //) → Fusion → Gold
-# ==========================================================================
+
 
 @task(name="Bronze - Fetch antennes relais", retries=2, retry_delay_seconds=60)
 def run_bronze_antennes(date_str: str):
@@ -194,10 +194,10 @@ def run_gold_connectivite(date_str: str):
         return None
 
 
-# ==========================================================================
+
 # INDICATEUR 3 — Vivabilité
 # Pas de bronze (fichiers statiques) → Silver (5 scripts en //) → Fusion → Gold
-# ==========================================================================
+
 
 
 @task(name="Silver - Criminalite", retries=1)
@@ -255,10 +255,10 @@ def run_gold_vivabilite(date_str: str):
         return None
 
 
-# ==========================================================================
+
 # INDICATEUR 4 — Services du quotidien
 # Pas de bronze → Silver (3 scripts en //) → Fusion → Gold
-# ==========================================================================
+
 
 @task(name="Silver - Commerces", retries=1)
 def run_silver_commerces(date_str: str):
@@ -308,10 +308,10 @@ def run_gold_services(date_str: str):
         return None
 
 
-# ==========================================================================
+
 # INDICATEUR 5 — Logement
 # Pas de bronze → Silver (3 scripts en //) → Fusion → Gold
-# ==========================================================================
+
 
 @task(name="Silver - DVF", retries=1)
 def run_silver_dvf(date_str: str):
@@ -359,9 +359,9 @@ def run_gold_accessibilite(date_str: str):
         return None
 
 
-# ==========================================================================
+
 # LOAD TEST
-# ==========================================================================
+
 
 @task(name="Load Test - PostgreSQL Silver + Gold", retries=0)
 def run_load_test(date_str: str):
@@ -375,10 +375,10 @@ def run_load_test(date_str: str):
         return None
 
 
-# ==========================================================================
+
 # CHAÎNES PAR INDICATEUR (sous-flows)
 # Chaque chaîne est autonome : bronze → silver → fusion → gold
-# ==========================================================================
+
 
 @task(name="Pipeline - Indicateur 1 Mobilite", retries=0)
 def chain_ind1(date_str: str):
@@ -466,9 +466,9 @@ def chain_ind5(date_str: str):
     logger.info("=== IND5 Logement : OK ===")
 
 
-# ==========================================================================
+
 # FLOW PRINCIPAL
-# ==========================================================================
+
 
 @flow(name="Urban Data Explorer — Main Daily Batch")
 def main_pipeline():
@@ -529,7 +529,7 @@ def main_pipeline():
         vol_silver_ind2 = folder_size_mb(os.path.join(ROOT_DIR, "silver", "indicateur2", "nettoyage-indicateur2", current_date))
         vol_silver_ind3 = folder_size_mb(os.path.join(ROOT_DIR, "silver", "indicateur3", "nettoyage-indicateur3", current_date))
         vol_silver_ind4 = folder_size_mb(os.path.join(ROOT_DIR, "silver", "indicateur4", "nettoyage-indicateur4", current_date))
-        vol_silver_ind5 = folder_size_mb(os.path.join(ROOT_DIR, "silver", "indicateur5", current_date))
+        vol_silver_ind5 = folder_size_mb(os.path.join(ROOT_DIR, "silver", "indicateur5", "nettoyage-indicateur5", current_date))
         vol_silver      = round(vol_silver_ind1 + vol_silver_ind2 + vol_silver_ind3 + vol_silver_ind4 + vol_silver_ind5, 2)
 
         vol_gold_ind1 = folder_size_mb(os.path.join(ROOT_DIR, "gold", "indicateur1", current_date))

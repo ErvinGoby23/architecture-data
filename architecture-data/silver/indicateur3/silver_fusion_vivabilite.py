@@ -8,7 +8,6 @@ import math
 import pandas as pd
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from pymongo import MongoClient, GEOSPHERE
@@ -177,13 +176,19 @@ try:
     def purge_nan(df_in):
         df_out = df_in.copy()
         for col in df_out.select_dtypes(include="float").columns:
-            df_out[col] = df_out[col].astype(object).where(
-                df_out[col].notna() & df_out[col].apply(
-                    lambda x: not (isinstance(x, float) and math.isinf(x))
-                ),
-                other=None,
-            )
+            mask = df_out[col].notna() & ~df_out[col].isin([float('inf'), float('-inf')])
+            df_out[col] = df_out[col].where(mask, other=None).astype(object)
         return df_out
+
+    def sanitize_docs(docs):
+        """Convertit pd.NA / NaN / inf restants en None pour JSON/MongoDB."""
+        for doc in docs:
+            for k, v in doc.items():
+                if v is pd.NA:
+                    doc[k] = None
+                elif isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                    doc[k] = None
+        return docs
 
     def to_geo_docs(df_in, type_label, cols_props):
         df_g = df_in.dropna(subset=['latitude', 'longitude']).copy()
@@ -198,11 +203,11 @@ try:
             for lon, lat in zip(df_clean['longitude'], df_clean['latitude'])
         ]
         df_clean['type'] = type_label
-        df_clean['code_quartier'] = df_clean['code_quartier'].apply(lambda x: int(x) if pd.notna(x) else None)
+        df_clean['code_quartier'] = pd.array(df_clean['code_quartier'], dtype='Int64')
         df_clean = df_clean.dropna(subset=['arrondissement'])
         df_clean['arrondissement'] = df_clean['arrondissement'].astype(int)
         keep = ['type', 'arrondissement', 'code_quartier', 'nom_quartier', 'geo'] + cols_props
-        return df_clean[[c for c in keep if c in df_clean.columns]].to_dict(orient='records')
+        return sanitize_docs(df_clean[[c for c in keep if c in df_clean.columns]].to_dict(orient='records'))
 
     def to_geo_docs_proprete(df_in, cols_props):
         df_g = df_in.dropna(subset=['latitude', 'longitude']).copy()
@@ -217,15 +222,11 @@ try:
             for lon, lat in zip(df_clean['longitude'], df_clean['latitude'])
         ]
         df_clean['type'] = df_clean['type_declaration'].fillna('signalement')
-        df_clean['code_quartier'] = df_clean['code_quartier'].apply(lambda x: int(x) if pd.notna(x) else None)
+        df_clean['code_quartier'] = pd.array(df_clean['code_quartier'], dtype='Int64')
         df_clean = df_clean.dropna(subset=['arrondissement'])
         df_clean['arrondissement'] = df_clean['arrondissement'].astype(int)
         keep = ['type', 'arrondissement', 'code_quartier', 'nom_quartier', 'geo'] + cols_props
-        return df_clean[[c for c in keep if c in df_clean.columns]].to_dict(orient='records')
-
-    def insert_chunk(chunk):
-        if chunk:
-            mongo['indicateur_vivabilite'].insert_many(chunk, ordered=False)
+        return sanitize_docs(df_clean[[c for c in keep if c in df_clean.columns]].to_dict(orient='records'))
 
     all_docs = []
 
@@ -248,19 +249,13 @@ try:
         print(f"  Signalements (echantillonnes) : {len(docs_prop):,} docs")
 
     if all_docs:
-        print(f"\n--- INSERTION MULTI-THREADEE ({len(all_docs):,} documents) ---")
-        chunk_size = 500
-        chunks = [all_docs[i:i+chunk_size] for i in range(0, len(all_docs), chunk_size)]
-        with ThreadPoolExecutor(max_workers=min(len(chunks), 4)) as executor:
-            futures = [executor.submit(insert_chunk, chunk) for chunk in chunks]
-            for f in futures:
-                f.result()
+        mongo['indicateur_vivabilite'].insert_many(all_docs, ordered=False)
 
-        mongo['indicateur_vivabilite'].create_index([("geo", GEOSPHERE)])
-        mongo['indicateur_vivabilite'].create_index([("code_quartier", 1)])
-        mongo['indicateur_vivabilite'].create_index([("arrondissement", 1)])
-        mongo['indicateur_vivabilite'].create_index([("type", 1)])
-        print(f"MongoDB : Importation reussie et index crees.")
+    mongo['indicateur_vivabilite'].create_index([("geo", GEOSPHERE)])
+    mongo['indicateur_vivabilite'].create_index([("code_quartier", 1)])
+    mongo['indicateur_vivabilite'].create_index([("arrondissement", 1)])
+    mongo['indicateur_vivabilite'].create_index([("type", 1)])
+    print(f"MongoDB : Importation reussie et index crees.")
 
 except Exception as e:
     print(f"MongoDB indisponible ou erreur traitement : {e}")

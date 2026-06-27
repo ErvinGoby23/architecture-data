@@ -6,7 +6,6 @@ Urban Data Explorer · Silver layer
 import pandas as pd
 import os
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from pymongo import MongoClient, GEOSPHERE
@@ -38,9 +37,9 @@ PG_URL    = os.getenv('PG_URL')
 MONGO_URL = os.getenv('MONGO_URL')
 MONGO_DB  = 'silver'
 
-# ==========================================================================
+
 # 1. LECTURE Parquet
-# ==========================================================================
+
 print("--- CHARGEMENT DES DONNÉES SILVER ---")
 df_arrets = pd.read_parquet(f'{SILVER_BASE}/{date_str}/arrets_lignes_paris_silver.parquet')
 df_taxi   = pd.read_parquet(f'{SILVER_BASE}/{date_str}/bornes_taxi_paris_silver.parquet')
@@ -58,9 +57,9 @@ df_arrets = df_arrets[[c for c in cols_arrets if c in df_arrets.columns]]
 df_taxi   = df_taxi[[c for c in cols_taxi     if c in df_taxi.columns]]
 df_stat   = df_stat[[c for c in cols_stat     if c in df_stat.columns]]
 
-# ==========================================================================
+
 # 2. CATÉGORISATION stationnement
-# ==========================================================================
+
 REGIME_MAP = {
     'PAYANT MIXTE'  : 'payant',
     'PAYANT ROTATIF': 'payant',
@@ -74,9 +73,9 @@ df_stat['regime_category'] = df_stat['regime_priorite'].map(REGIME_MAP)
 df_stat = df_stat.rename(columns={'places_relevees': 'nb_places_reelles'})
 df_stat = df_stat[df_stat['regime_category'].notna()].copy()
 
-# ==========================================================================
+
 # 3. FONCTION D'AGRÉGATION GÉNÉRIQUE (quartier ou arrondissement)
-# ==========================================================================
+
 def agreger(df_arrets, df_taxi, df_stat, group_col):
     """Agrège les 3 sources sur la colonne group_col (code_quartier ou arrondissement)."""
 
@@ -137,9 +136,9 @@ def agreger(df_arrets, df_taxi, df_stat, group_col):
     df_fusion = df_fusion.sort_values(group_col).reset_index(drop=True)
     return df_fusion
 
-# ==========================================================================
+
 # 4. AGRÉGATION QUARTIER + ARRONDISSEMENT
-# ==========================================================================
+
 print("\n--- AGRÉGATION PAR QUARTIER ---")
 df_quartier = agreger(df_arrets, df_taxi, df_stat, 'code_quartier')
 
@@ -152,9 +151,9 @@ print("\n--- AGRÉGATION PAR ARRONDISSEMENT ---")
 df_arrondissement = agreger(df_arrets, df_taxi, df_stat, 'arrondissement')
 print(f"Shape arrondissement : {df_arrondissement.shape} ({df_arrondissement['arrondissement'].nunique()} arrondissements)")
 
-# ==========================================================================
+
 # 5. EXPORTS PARQUET
-# ==========================================================================
+
 parquet_quartier = os.path.join(SILVER_OUTPUT_DIR, 'indicateur_mobilite_quartier_silver.parquet')
 df_quartier.to_parquet(parquet_quartier, index=False)
 print(f'\n✓ Parquet quartier : {parquet_quartier}')
@@ -163,9 +162,9 @@ parquet_arrondissement = os.path.join(SILVER_OUTPUT_DIR, 'indicateur_mobilite_ar
 df_arrondissement.to_parquet(parquet_arrondissement, index=False)
 print(f'✓ Parquet arrondissement : {parquet_arrondissement}')
 
-# ==========================================================================
+
 # 6. POSTGRESQL
-# ==========================================================================
+
 try:
     engine = create_engine(PG_URL)
     with engine.connect() as conn:
@@ -192,64 +191,44 @@ try:
 except Exception as e:
     print(f'❌ PostgreSQL indisponible : {e}')
 
-# ==========================================================================
+
 # 7. MONGODB (points géo inchangés, on ajoute code_quartier + arrondissement)
-# ==========================================================================
+
 print("\n--- INSERTION DES DOCUMENTS GÉOMÉTRIQUES DANS MONGODB ---")
 
 df_arrets_valid = df_arrets.dropna(subset=['stop_lat', 'stop_lon']).copy()
-arrets_docs = [{
-    'code_quartier' : int(r['code_quartier']),
-    'nom_quartier'  : r.get('nom_quartier', ''),
-    'arrondissement': int(r['arrondissement']),
-    'type'          : 'arret',
-    'mode_nom'      : r.get('mode_nom', ''),
-    'geo'           : {'type': 'Point', 'coordinates': [float(r['stop_lon']), float(r['stop_lat'])]},
-} for _, r in df_arrets_valid.iterrows()]
+df_arrets_valid['code_quartier']  = df_arrets_valid['code_quartier'].astype(int)
+df_arrets_valid['arrondissement'] = df_arrets_valid['arrondissement'].astype(int)
+arrets_docs = df_arrets_valid[['code_quartier', 'nom_quartier', 'arrondissement', 'mode_nom', 'stop_lon', 'stop_lat']].to_dict(orient='records')
+for doc in arrets_docs:
+    doc['type'] = 'arret'
+    doc['geo']  = {'type': 'Point', 'coordinates': [float(doc.pop('stop_lon')), float(doc.pop('stop_lat'))]}
 
 df_taxi_valid = df_taxi.dropna(subset=['lat', 'lon']).copy()
-taxi_docs = [{
-    'code_quartier' : int(r['code_quartier']),
-    'nom_quartier'  : r.get('nom_quartier', ''),
-    'arrondissement': int(r['arrondissement']),
-    'type'          : 'borne_taxi',
-    'geo'           : {'type': 'Point', 'coordinates': [float(r['lon']), float(r['lat'])]},
-} for _, r in df_taxi_valid.iterrows()]
+df_taxi_valid['code_quartier']  = df_taxi_valid['code_quartier'].astype(int)
+df_taxi_valid['arrondissement'] = df_taxi_valid['arrondissement'].astype(int)
+taxi_docs = df_taxi_valid[['code_quartier', 'nom_quartier', 'arrondissement', 'lon', 'lat']].to_dict(orient='records')
+for doc in taxi_docs:
+    doc['type'] = 'borne_taxi'
+    doc['geo']  = {'type': 'Point', 'coordinates': [float(doc.pop('lon')), float(doc.pop('lat'))]}
 
 df_stat_full = pd.read_parquet(f'{SILVER_BASE}/{date_str}/stationnement_paris_silver.parquet')
 df_stat_geo  = df_stat_full.dropna(subset=['latitude', 'longitude']).copy()
-stat_docs = [{
-    'code_quartier' : int(r['code_quartier']),
-    'nom_quartier'  : r.get('nom_quartier', ''),
-    'arrondissement': int(r['arrondissement']),
-    'type'          : REGIME_MAP.get(r.get('regime_priorite', ''), 'autre'),
-    'geo'           : {'type': 'Point', 'coordinates': [float(r['longitude']), float(r['latitude'])]},
-} for _, r in df_stat_geo.iterrows()]
-
-def insert_arrets():
-    if arrets_docs:
-        mongo['indicateur_mobilite'].insert_many(arrets_docs, ordered=False)
-
-def insert_taxi():
-    if taxi_docs:
-        mongo['indicateur_mobilite'].insert_many(taxi_docs, ordered=False)
-
-def insert_stationnement():
-    if stat_docs:
-        mongo['indicateur_mobilite'].insert_many(stat_docs, ordered=False)
+df_stat_geo['code_quartier']  = df_stat_geo['code_quartier'].astype(int)
+df_stat_geo['arrondissement'] = df_stat_geo['arrondissement'].astype(int)
+stat_docs = df_stat_geo[['code_quartier', 'nom_quartier', 'arrondissement', 'regime_priorite', 'longitude', 'latitude']].to_dict(orient='records')
+for doc in stat_docs:
+    doc['type'] = REGIME_MAP.get(doc.pop('regime_priorite', ''), 'autre')
+    doc['geo']  = {'type': 'Point', 'coordinates': [float(doc.pop('longitude')), float(doc.pop('latitude'))]}
 
 try:
     client = MongoClient(MONGO_URL)
     mongo  = client[MONGO_DB]
     mongo['indicateur_mobilite'].drop()
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        future_arrets = executor.submit(insert_arrets)
-        future_taxi   = executor.submit(insert_taxi)
-        future_stat   = executor.submit(insert_stationnement)
-        future_arrets.result()
-        future_taxi.result()
-        future_stat.result()
+    all_docs = arrets_docs + taxi_docs + stat_docs
+    if all_docs:
+        mongo['indicateur_mobilite'].insert_many(all_docs, ordered=False)
 
     mongo['indicateur_mobilite'].create_index([("geo", GEOSPHERE)])
     mongo['indicateur_mobilite'].create_index([("code_quartier", 1)])
@@ -257,6 +236,6 @@ try:
     print(f'✓ MongoDB : {len(arrets_docs) + len(taxi_docs) + len(stat_docs)} documents insérés')
     print('✓ MongoDB : Index 2dsphere + code_quartier + arrondissement créés')
 except Exception as e:
-    print(f'❌ MongoDB indisponible : {e}')
+    print(f' MongoDB indisponible : {e}')
 
 print('\n=== SILVER mobilité OK ===')

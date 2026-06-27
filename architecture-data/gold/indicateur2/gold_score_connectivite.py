@@ -45,9 +45,9 @@ PG_URL     = os.getenv('PG_URL')
 os.makedirs(GOLD_DIR, exist_ok=True)
 
 
-# ==========================================================================
+
 # FONCTIONS COMMUNES
-# ==========================================================================
+
 
 def normalize(series):
     min_v, max_v = series.min(), series.max()
@@ -127,9 +127,9 @@ def exporter(df_gold, table_name, pk_cols, parquet_path, engine):
         print(f'❌ PostgreSQL indisponible pour {table_name} : {e}')
 
 
-# ==========================================================================
+
 # SURFACE — ARRONDISSEMENTS
-# ==========================================================================
+
 csv_arr     = os.path.join(BRUTE_DIR, 'arrondissements.csv')
 df_arr_ref  = pd.read_csv(csv_arr, sep=';')
 col_surface = next((c for c in df_arr_ref.columns if 'surface' in c.lower()), None)
@@ -154,25 +154,25 @@ except Exception as e:
     print(f'⚠️ PostgreSQL non initialisé : {e}')
 
 
-# ==========================================================================
+
 # BLOC 1 — ARRONDISSEMENT (avec fibre)
-# ==========================================================================
+
 print("\n--- GOLD ARRONDISSEMENT ---")
 silver_arr_path = os.path.join(SILVER_DIR, 'indicateur_connectivite_silver.parquet')
 if not os.path.exists(silver_arr_path):
     raise FileNotFoundError(f"Silver arrondissement introuvable : {silver_arr_path}")
 
 df_arr = pd.read_parquet(silver_arr_path)
-df_arr['arrondissement'] = df_arr['code_postal'].astype(int) - 75000
+df_arr['arrondissement'] = df_arr['arrondissement'].astype(int)
 df_arr = df_arr.merge(df_surface_arr, on='arrondissement', how='left')
 df_arr = calculer_scores(df_arr, niveau='arrondissement')
 
 assert df_arr['score_connectivite'].isna().sum() == 0
 assert df_arr['score_connectivite'].between(0, 1).all()
-assert len(df_arr) == 20, f"❌ Nombre d'arrondissements incorrect : {len(df_arr)}"
+assert len(df_arr) == 20, f"Nombre d'arrondissements incorrect : {len(df_arr)}"
 
 cols_arr = [
-    'code_postal',
+    'arrondissement',
     'nb_antennes', 'nb_antennes_2g', 'nb_antennes_3g', 'nb_antennes_4g', 'nb_antennes_5g',
     'nb_antennes_orange', 'nb_antennes_sfr', 'nb_antennes_free', 'nb_antennes_bouygues',
     'operateur_leader', 'taux_fibre', 'taux_5g', 'taux_4g',
@@ -184,15 +184,15 @@ df_arr_gold = df_arr[[c for c in cols_arr if c in df_arr.columns]].sort_values('
 exporter(
     df_arr_gold,
     table_name='score_connectivite',
-    pk_cols=['code_postal'],
+    pk_cols=['arrondissement'],
     parquet_path=os.path.join(GOLD_DIR, 'score_connectivite_gold.parquet'),
     engine=engine
 )
 
 
-# ==========================================================================
+
 # BLOC 2 — QUARTIER (sans fibre)
-# ==========================================================================
+
 print("\n--- GOLD QUARTIER ---")
 silver_qu_path = os.path.join(SILVER_DIR, 'indicateur_connectivite_quartier_silver.parquet')
 if not os.path.exists(silver_qu_path):

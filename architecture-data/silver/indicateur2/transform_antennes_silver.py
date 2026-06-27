@@ -9,7 +9,7 @@ import json
 from shapely.geometry import shape
 import os
 import sys
-from datetime import datetime
+import numpy as np
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 BRONZE_BASE = os.path.join(CURRENT_DIR, '../../brute/Score-de-connectivite')
@@ -40,9 +40,10 @@ df.columns = df.columns.str.strip().str.replace('\ufeff', '', regex=False)
 print(f"Shape brute : {df.shape}")
 
 # Extraction coordonnées
-geo = df['geo_point_2d'].tolist()
-df['latitude']  = pd.to_numeric([x.get('lat') if isinstance(x, dict) else None for x in geo], errors='coerce')
-df['longitude'] = pd.to_numeric([x.get('lon') if isinstance(x, dict) else None for x in geo], errors='coerce')
+# Extraction coordonnées ultra rapide en C (Pandas natif)
+coord_df = pd.json_normalize(df['geo_point_2d'])
+df['latitude']  = pd.to_numeric(coord_df['lat'], errors='coerce')
+df['longitude'] = pd.to_numeric(coord_df['lon'], errors='coerce')
 
 cols_drop = ['geo_point_2d', 'geo_shape', 'mise_en_serv_5g_700', 'se_anno_cad_data',
              'adresse', 'mise_en_serv', 'mise_en_serv_4g', 'mise_en_serv_5g_3500']
@@ -51,14 +52,15 @@ df = df.drop(columns=[c for c in cols_drop if c in df.columns])
 df['operateur'] = df['operateur'].str.upper().str.strip()
 df['type']      = df['type'].fillna('NON RENSEIGNÉ')
 
-def generation(t):
-    if pd.isna(t) or t == 'NON RENSEIGNÉ': return '2G'
-    if '5G' in t: return '5G'
-    if '4G' in t: return '4G'
-    if '3G' in t: return '3G'
-    return '2G'
-
-df['generation'] = df['type'].apply(generation)
+df['generation'] = np.select(
+    [
+        df['type'].str.contains('5G', na=False),
+        df['type'].str.contains('4G', na=False),
+        df['type'].str.contains('3G', na=False),
+    ],
+    ['5G', '4G', '3G'],
+    default='2G'
+)
 df['has_5g'] = df['generation'] == '5G'
 df['has_4g'] = df['generation'] == '4G'
 df['has_3g'] = df['generation'] == '3G'
@@ -96,9 +98,9 @@ def parse_geometry(geom_str):
     except Exception:
         return None
 
-# ==========================================================================
+
 # JOINTURE 1 — ARRONDISSEMENT (comme avant)
-# ==========================================================================
+
 df_arr    = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/arrondissements.csv', sep=';')
 geo_col_arr = next((c for c in df_arr.columns if c.strip() == 'Geometry'), None)
 if not geo_col_arr:
@@ -125,9 +127,9 @@ df_final_arr['code_postal'] = df_final_arr['code_postal'].astype(int)
 
 print(f"Antennes Paris (arrondissement) retenues : {len(df_final_arr):,}")
 
-# ==========================================================================
+
 # JOINTURE 2 — QUARTIER
-# ==========================================================================
+
 df_qu = pd.read_csv('../../brute/indicateur-Score-accessibilité-mobilité/quartiers.csv', sep=';')
 df_qu.columns = df_qu.columns.str.strip()
 
@@ -160,9 +162,9 @@ df_final_qu['arrondissement'] = df_final_qu['arrondissement'].astype(int)
 print(f"Antennes Paris (quartier) retenues : {len(df_final_qu):,}")
 print(f"Quartiers uniques : {df_final_qu['code_quartier'].nunique()}")
 
-# ==========================================================================
+
 # VALIDATION SPATIALE
-# ==========================================================================
+
 print("\n=== VALIDATION SPATIALE (échantillon 5 points) ===")
 sample = df_final_arr.groupby('code_postal').first().reset_index()[
     ['code_postal', 'latitude', 'longitude', 'operateur']
@@ -171,9 +173,9 @@ for _, r in sample.iterrows():
     print(f"  CP {int(r['code_postal'])} | {r['operateur']}\n"
           f"  → https://www.google.com/maps?q={r['latitude']},{r['longitude']}")
 
-# ==========================================================================
+
 # EXPORT PARQUET
-# ==========================================================================
+
 output_dir = os.path.join('nettoyage-indicateur2', date_str)
 os.makedirs(output_dir, exist_ok=True)
 

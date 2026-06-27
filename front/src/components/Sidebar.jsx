@@ -117,11 +117,11 @@ export default function Sidebar({
       <div className="sidebar-section">
         <p className="sidebar-section-title">Légende</p>
         <div className="legend">
-          {[
-            { label: 'Score élevé',  color: '#00d4aa' },
-            { label: 'Score moyen',  color: '#f7934f' },
-            { label: 'Score faible', color: '#ef4444' },
-          ].map((l, i) => (
+      {[
+        { label: 'Score élevé',  color: '#d73027' },
+        { label: 'Score moyen',  color: '#fee08b' },
+        { label: 'Score faible', color: '#1a9850' },
+      ].map((l, i) => (
             <div className="legend-item" key={i}>
               <div className="legend-swatch" style={{ background: l.color }} />
               <span>{l.label}</span>

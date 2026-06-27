@@ -43,9 +43,6 @@ app.include_router(vivabilite.router)
 app.include_router(services.router)
 app.include_router(logement.router)
 
-# 2. AJOUTER LE ROUTEUR À L'APPLICATION ICI
-app.include_router(logement.router)
-
 @app.get("/", tags=["Info"])
 def root():
     return {"message": "Urban Data Explorer API", "version": "2.0.0"}
